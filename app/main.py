@@ -619,7 +619,8 @@ async def start_integration(
     enable_scheduled: bool = Form(False),
     schedule_start_date: str = Form(None),
     schedule_start_time: str = Form(None),
-    schedule_interval: int = Form(60)
+    schedule_interval: int = Form(60),
+    blurred_bg: bool = Form(False)
 ):
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"status": "starting", "progress": 0, "shorts": [], "integration": True}

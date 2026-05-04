@@ -565,8 +565,8 @@ async function createShorts() {
             return alert('Введите URL');
         }
         
-        const smartSelection = document.getElementById('smart-selection-url').checked;
-        const blurredBg = document.getElementById('blurred-bg-url').checked;
+        const smartSelection = String(document.getElementById('smart-selection-url').checked);
+        const blurredBg = String(document.getElementById('blurred-bg-url').checked);
         const response = await fetch('/api/upload-url', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
@@ -611,8 +611,8 @@ async function createShortsFromFile() {
         formData.append('file', fileInput.files[0]);
         formData.append('short_length', shortLength);
         formData.append('shorts_count', shortsCount);
-        formData.append('smart_selection', document.getElementById('smart-selection-file').checked);
-        formData.append('blurred_bg', document.getElementById('blurred-bg-file').checked);
+        formData.append('smart_selection', String(document.getElementById('smart-selection-file').checked));
+        formData.append('blurred_bg', String(document.getElementById('blurred-bg-file').checked));
         
         btn.textContent = 'Загружаем файл...';
         const response = await fetch('/api/upload-file', {

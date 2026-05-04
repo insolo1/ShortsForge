@@ -236,104 +236,65 @@ class VideoProcessor:
                         subtitle_shadowcolor = line.split('=')[1].strip().strip('"')
         
         # 9:16 формат
-        if blurred_bg:
-            # Размытый фон: основное видео по центру + размытая подложка
-            # Используем ; для нескольких фильтров
-            filters = "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[main];[0:v]scale=270:480,boxblur=20[blur];[blur][main]overlay=0:0"
-        else:
-            filters = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
+        filters = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
         
-        # Субтитры через drawtext (по словам) - записываем в файл через filter_script
+        # Субтитры
         if subtitle_segments:
-            print(f"[SUBTITLE] Adding {len(subtitle_segments)} words/segments via drawtext")
-            
+            print(f"[SUBTITLE] Adding {len(subtitle_segments)} words via drawtext")
             for seg in subtitle_segments:
                 text = seg['text'].strip().replace("'", "'").replace(":", "\\:")
                 if not text:
                     continue
-                    
                 start_time = seg['start']
                 end_time = seg['end']
-                
-                # Стиль текста (bold/italic не поддерживаются drawtext напрямую, используем через font)
                 fontcolor_hex = self.color_to_hex(subtitle_fontcolor)
-                style_str = ""
-                # Для bold/italic нужно использовать соответствующий файл шрифта
-                # В данной сборке FFmpeg опции bold/italic не поддерживаются
-                
-                # Тень
-                shadow_str = ""
-                if subtitle_shadowcolor != "none":
-                    shadow_hex = self.color_to_hex(subtitle_shadowcolor)
-                    shadow_str = f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={shadow_hex}"
-                
-                # Обводка
-                border_str = ""
-                if subtitle_borderw > 0 and subtitle_bordercolor != "none":
-                    border_hex = self.color_to_hex(subtitle_bordercolor)
-                    border_str = f":borderw={subtitle_borderw}:bordercolor={border_hex}"
-                
-                # Фон (box) - disabled for now, will fix format later
-                box_str = ""
-                # TODO: Enable boxcolor with proper format 0xRRGGBBAA
-                # if subtitle_boxborder > 0 and subtitle_boxcolor != "none":
-                #     box_color_hex = self.color_to_hex(subtitle_boxcolor)
-                #     # Convert alpha: 0.8 -> CC (hex)
-                #     alpha_hex = "CC"  # Default 80% opacity
-                #     if "@" in subtitle_boxcolor:
-                #         alpha_val = float(subtitle_boxcolor.split("@")[1])
-                #         alpha_hex = f"{int(alpha_val * 255):02X}"
-                #     box_str = f":box=1:boxborderw={subtitle_boxborder}:boxcolor={box_color_hex}{alpha_hex}"
-                
-                # Итоговый drawtext
                 enable_expr = f"between(t, {start_time:.3f}, {end_time:.3f})"
-                
-                dt = "drawtext=text='" + text + "':"
-                dt += f"fontsize={subtitle_fontsize}:"
-                dt += f"fontcolor={fontcolor_hex}:"
-                dt += f"x=(w-text_w)/2:"
-                dt += f"y={1920-subtitle_position}:"
-                dt += f"enable='{enable_expr}'"
-                dt += style_str + shadow_str + border_str + box_str
-                
+                dt = f"drawtext=text='{text}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
                 filters += "," + dt
         
         # Write filter to file to avoid WinError 206 (command line too long)
         filter_file_path = self.output_dir / f"filter_{job_id}_{index}.txt"
         with open(filter_file_path, 'w', encoding='utf-8') as f:
             f.write(filters)
-        
         print(f"[VIDEO] Filter length: {len(filters)} chars")
         print(f"[FILTER] Filter written to file: {filter_file_path}")
         
+        # Пока не работает стабильно - используем обычный 9:16
+        cmd = [
+            r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
+            "-ss", str(segment["start"]),
+            "-i", video_path,
+            "-t", str(segment["end"] - segment["start"]),
+            "-filter_script:v", str(filter_file_path),
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-map", "0:v",
+            "-map", "0:a",
+            str(output_path)
+        ]
+        
+        # Для размытого фона используем 2 входа
         if blurred_bg:
+            # [0:v] - фон (размытый 9:16)
+            # [1:v] - видео по центру
+            complex_filter = "[0:v]scale=ih*9/16:ih,scale=1080:1920,boxblur=25[bg];[1:v]scale=540:960,pad=540:960:0:0[fg];[bg][fg]overlay=270:480"
+            
             cmd = [
                 r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
                 "-ss", str(segment["start"]),
                 "-i", video_path,
+                "-i", video_path,
                 "-t", str(segment["end"] - segment["start"]),
-                "-filter_complex", filters,
+                "-filter_complex", complex_filter,
                 "-c:v", "libx264",
                 "-preset", "fast",
                 "-crf", "23",
                 "-c:a", "aac",
                 "-b:a", "128k",
-                str(output_path)
-            ]
-        else:
-            cmd = [
-                r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
-                "-ss", str(segment["start"]),
-                "-i", video_path,
-                "-t", str(segment["end"] - segment["start"]),
-                "-filter_script:v", str(filter_file_path),
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
-                "-c:a", "aac",
-                "-b:a", "128k",
-                "-map", "0:v",
-                "-map", "0:a",
+                "-map", "1:a",
                 str(output_path)
             ]
         
