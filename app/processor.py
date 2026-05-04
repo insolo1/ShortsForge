@@ -280,7 +280,7 @@ class VideoProcessor:
         if blurred_bg:
             # [0:v] - фон (размытый 9:16)
             # [1:v] - видео по центру
-            complex_filter = "[0:v]scale=ih*9/16:ih,scale=1080:1920,boxblur=25[bg];[1:v]scale=540:960,pad=540:960:0:0[fg];[bg][fg]overlay=270:480"
+            complex_filter = "split[bg][fg];[bg]scale=ih*9/16:ih,scale=1080:1920,boxblur=25[bg];[fg]scale=540:960,pad=540:960:0:0[fg];[bg][fg]overlay=270:480"
             
             cmd = [
                 r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
