@@ -58,28 +58,89 @@ class VideoProcessor:
         return segments
     
     def _find_best_segments(self, duration: float, short_length: int, shorts_count: int, subtitle_segments: List[Dict]) -> List[Dict]:
-        """Находит лучшие отрезки по плотности речи"""
-        import math
+        """Находит лучшие отрезки по плотности речи и длине непрерывной речи"""
         
-        # Считаем слова для каждого потенциального отрезка
-        best_segments = []
+        # 1. Группируем слова в непрерывные фразы (паузы < 1 сек = одна фраза)
+        phrases = []
+        if not subtitle_segments:
+            return self._default_segments(duration, short_length, shorts_count)
         
-        # Проходим окном по всему видео с шагом 50%
+        current_phrase = None
+        for word in subtitle_segments:
+            if current_phrase is None:
+                current_phrase = {"start": word["start"], "end": word["end"], "words": 1, "texts": [word.get("text", "")]}
+            else:
+                # Если пауза < 1 сек - продолжаем фразу
+                if word["start"] - current_phrase["end"] < 1.0:
+                    current_phrase["end"] = word["end"]
+                    current_phrase["words"] += 1
+                    current_phrase["texts"].append(word.get("text", ""))
+                else:
+                    # Сохраняем старую фразу и начинаем новую
+                    current_phrase["duration"] = current_phrase["end"] - current_phrase["start"]
+                    current_phrase["density"] = current_phrase["words"] / max(current_phrase["duration"], 0.1)
+                    current_phrase["full_text"] = " ".join(current_phrase["texts"])
+                    phrases.append(current_phrase)
+                    current_phrase = {"start": word["start"], "end": word["end"], "words": 1, "texts": [word.get("text", "")]}
+        
+        # Добавляем последнюю фразу
+        if current_phrase:
+            current_phrase["duration"] = current_phrase["end"] - current_phrase["start"]
+            current_phrase["density"] = current_phrase["words"] / max(current_phrase["duration"], 0.1)
+            current_phrase["full_text"] = " ".join(current_phrase["texts"])
+            phrases.append(current_phrase)
+        
+        if not phrases:
+            return self._default_segments(duration, short_length, shorts_count)
+        
+        # 2. Вычисляем score для каждого окна
         step = short_length // 2
         candidates = []
         
         for start in range(0, int(duration - short_length), step):
             end = start + short_length
-            # Считаем количество слов в этом отрезке
-            word_count = sum(1 for seg in subtitle_segments if seg['start'] >= start and seg['end'] <= end)
-            candidates.append({"start": float(start), "end": float(end), "words": word_count})
+            
+            # Находим все фразы в этом окне
+            phrases_in_window = [p for p in phrases if p["start"] >= start and p["end"] <= end]
+            
+            if not phrases_in_window:
+                continue
+            
+            # Метрики:
+            # - Общее количество слов
+            total_words = sum(p["words"] for p in phrases_in_window)
+            # - Плотность слов (слов в секунду)
+            density = total_words / short_length
+            # - Общая длительность речи (без пауз)
+            speech_duration = sum(p["duration"] for p in phrases_in_window)
+            # - Процент времени с речью
+            speech_ratio = speech_duration / short_length
+            # - Средняя длина фразы
+            avg_phrase_len = total_words / len(phrases_in_window) if phrases_in_window else 0
+            
+            # Score = комбинация всех метрик
+            # Больше слов, выше плотность, больше речи без пауз = лучше
+            score = (total_words * 1.0) + (density * 10) + (speech_ratio * 20) + (avg_phrase_len * 2)
+            
+            candidates.append({
+                "start": float(start),
+                "end": float(end),
+                "score": score,
+                "words": total_words,
+                "density": density,
+                "speech_ratio": speech_ratio,
+                "phrases": len(phrases_in_window)
+            })
         
-        # Сортируем по количеству слов (больше = лучше)
-        candidates.sort(key=lambda x: x["words"], reverse=True)
+        if not candidates:
+            return self._default_segments(duration, short_length, shorts_count)
         
-        # Выбираем топ N непересекающихся отрезков
+        # Сортируем по score
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        
+        # Выбираем топ N непересекающихся
+        best_segments = []
         for cand in candidates:
-            # Проверяем, не пересекается ли с уже выбранными
             overlap = False
             for sel in best_segments:
                 if cand["start"] < sel["end"] and cand["end"] > sel["start"]:
@@ -92,11 +153,35 @@ class VideoProcessor:
             if len(best_segments) >= shorts_count:
                 break
         
-        # Сортируем по времени начала
+        # Если набрали меньше чем нужно - добираем из следующих по score
+        if len(best_segments) < shorts_count:
+            for cand in candidates:
+                if cand in best_segments:
+                    continue
+                overlap = False
+                for sel in best_segments:
+                    if cand["start"] < sel["end"] and cand["end"] > sel["start"]:
+                        overlap = True
+                        break
+                if not overlap:
+                    best_segments.append(cand)
+                if len(best_segments) >= shorts_count:
+                    break
+        
+        # Сортируем по времени
         best_segments.sort(key=lambda x: x["start"])
         
-        print(f"[PROCESS] Found {len(best_segments)} best segments by speech density")
+        print(f"[PROCESS] Found {len(best_segments)} best segments. Top score: {best_segments[0]['score']:.1f}, words: {best_segments[0]['words']}, density: {best_segments[0]['density']:.1f}")
         return best_segments
+    
+    def _default_segments(self, duration: float, short_length: int, shorts_count: int) -> List[Dict]:
+        """Fallback если нет субтитров"""
+        segments = []
+        for i in range(min(shorts_count, int(duration // short_length))):
+            start = i * short_length
+            end = min(start + short_length, duration)
+            segments.append({"start": start, "end": end})
+        return segments
     
     async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None) -> str:
         output_path = self.output_dir / f"short_{job_id}_{index}.mp4"

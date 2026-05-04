@@ -65,3 +65,50 @@ class AIService:
             "description": "Смотри до конца! Подпишись! 👍",
             "tags": ["shorts", "viral", "trending", "fun", "wow", "amazing"]
         }
+    
+    async def select_best_segments(self, full_transcript: str, short_length: int = 45) -> list:
+        """Выбирает 3 лучших фрагмента из транскрипта по критериям вирусности"""
+        if not self.client:
+            return []
+        
+        try:
+            prompt = f"""Действуй как эксперт по виртуальным YouTube Shorts.
+Я дам тебе текст длинного видео. Выбери из него 3 лучших фрагмента для нарезки Shorts.
+
+Критерии идеального куска:
+1. Сильный хук: Фрагмент начинается сразу с главного (интрига, парадокс, разрушение мифа или сильная эмоция).
+2. Автономность: Смысл полностью понятен без просмотра основного видео. Никаких "как я уже говорил", "в предыдущей части".
+3. Хронометраж: Текст фрагмента должен быть в пределах 100–150 слов (чтобы уложиться в 30–60 секунд при скорости ~2 слов/сек).
+
+Текст видео:
+{full_transcript}
+
+Формат ответа для каждого из 3 фрагментов (строгий JSON массив):
+[
+  {{
+    "title": "Заголовок - цепляющая фраза для надписи на видео (5-7 слов)",
+    "quote": "Точный текст спикера от первого до последнего слова фрагмента (100-150 слов)",
+    "feature": "Одно предложение - почему этот кусок удержит внимание зрителя"
+  }},
+  ...ещё 2 фрагмента
+]
+
+Верни только JSON массив без markdown кодовых блоков."""
+
+            response = self.client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.8,
+                max_tokens=2000
+            )
+            
+            content = response.choices[0].message.content
+            content = content.strip().replace("```json", "").replace("```", "").strip("`")
+            segments = json.loads(content)
+            
+            print(f"[AI] Selected {len(segments)} best segments")
+            return segments
+            
+        except Exception as e:
+            print(f"[AI] Error selecting segments: {e}")
+            return []
