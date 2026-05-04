@@ -119,15 +119,11 @@ class VideoProcessor:
                 start_time = seg['start']
                 end_time = seg['end']
                 
-                # Стиль текста
+                # Стиль текста (bold/italic не поддерживаются drawtext напрямую, используем через font)
                 fontcolor_hex = self.color_to_hex(subtitle_fontcolor)
                 style_str = ""
-                if subtitle_style == "bold":
-                    style_str = ":bold=1"
-                elif subtitle_style == "italic":
-                    style_str = ":italic=1"
-                elif subtitle_style == "bold_italic":
-                    style_str = ":bold=1:italic=1"
+                # Для bold/italic нужно использовать соответствующий файл шрифта
+                # В данной сборке FFmpeg опции bold/italic не поддерживаются
                 
                 # Тень
                 shadow_str = ""
