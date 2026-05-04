@@ -565,10 +565,11 @@ async function createShorts() {
             return alert('Введите URL');
         }
         
+        const smartSelection = document.getElementById('smart-selection-url').checked;
         const response = await fetch('/api/upload-url', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: `url=${encodeURIComponent(url)}&short_length=${shortLength}&shorts_count=${shortsCount}`
+            body: `url=${encodeURIComponent(url)}&short_length=${shortLength}&shorts_count=${shortsCount}&smart_selection=${smartSelection}`
         });
         
         if (!response.ok) {
@@ -609,6 +610,7 @@ async function createShortsFromFile() {
         formData.append('file', fileInput.files[0]);
         formData.append('short_length', shortLength);
         formData.append('shorts_count', shortsCount);
+        formData.append('smart_selection', document.getElementById('smart-selection-file').checked);
         
         btn.textContent = 'Загружаем файл...';
         const response = await fetch('/api/upload-file', {

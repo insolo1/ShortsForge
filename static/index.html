@@ -29,45 +29,12 @@
                     <button id="logout-btn" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 transition text-sm">
                         Выход
                     </button>
+                    </div>
                 </div>
-            </div>
-            <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-pink-500 to-purple-500 bg-clip-text text-transparent">
-                Видео в Shorts
-            </h1>
-            <p class="text-gray-400">Конвертация длинных видео в короткие ролики</p>
-        </header>
 
-        <div class="card rounded-2xl p-6 mb-8">
-            <div class="flex gap-4 mb-6">
-                <button id="tab-url" class="flex-1 py-3 rounded-xl font-medium bg-purple-600 hover:bg-purple-700 transition">
-                    YouTube URL
-                </button>
-                <button id="tab-file" class="flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition">
-                    Файл
-                </button>
-                <button id="tab-settings" class="flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition">
-                    Настройки
-                </button>
-                <button id="tab-integration" class="flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition">
-                    Интеграция
-                </button>
-            </div>
-
-            <div id="section-url">
-                <input type="text" id="video-url" placeholder="Вставьте ссылку YouTube"
-                    class="w-full p-4 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none mb-4">
-                
-                <div class="grid grid-cols-2 gap-4 mb-4">
-                    <div>
-                        <label class="block text-sm text-gray-400 mb-2">Длина (сек)</label>
-                        <input type="number" id="short-length" value="45" min="15" max="60"
-                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                    </div>
-                    <div>
-                        <label class="block text-sm text-gray-400 mb-2">Количество</label>
-                        <input type="number" id="shorts-count" value="5" min="1" max="100"
-                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                    </div>
+                <div class="flex items-center gap-2 mb-4">
+                    <input type="checkbox" id="smart-selection-url" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-400">Выбрать лучшие моменты (по речи)</span>
                 </div>
 
                 <h4 class="text-md font-semibold mb-3 mt-6">Музыка для видео</h4>
@@ -162,6 +129,11 @@
                             <span class="text-sm text-gray-400">Заменить оригинальный звук</span>
                         </div>
                     </div>
+                </div>
+
+                <div class="flex items-center gap-2 mb-4">
+                    <input type="checkbox" id="smart-selection-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-400">Выбрать лучшие моменты (по речи)</span>
                 </div>
 
                 <button id="create-btn-file" class="w-full py-4 rounded-xl font-bold text-lg bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 transition">
