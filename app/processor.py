@@ -280,7 +280,21 @@ class VideoProcessor:
         if blurred_bg:
             # [0:v] - фон (размытый 9:16)
             # [1:v] - видео по центру
-            complex_filter = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25[bg];[1:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2"
+            bg_filter = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25[bg];[1:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[out]"
+            
+            # Добавляем субтитры
+            if subtitle_segments:
+                print(f"[SUBTITLE] Adding {len(subtitle_segments)} words via drawtext for blurred bg")
+                for seg in subtitle_segments:
+                    text = seg['text'].strip().replace("'", "'").replace(":", "\\:")
+                    if not text:
+                        continue
+                    start_time = seg['start']
+                    end_time = seg['end']
+                    fontcolor_hex = self.color_to_hex(subtitle_fontcolor)
+                    enable_expr = f"between(t, {start_time:.3f}, {end_time:.3f})"
+                    dt = f"drawtext=text='{text}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
+                    bg_filter += "," + dt
             
             cmd = [
                 r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
@@ -288,7 +302,7 @@ class VideoProcessor:
                 "-i", video_path,
                 "-i", video_path,
                 "-t", str(segment["end"] - segment["start"]),
-                "-filter_complex", complex_filter,
+                "-filter_complex", bg_filter,
                 "-c:v", "libx264",
                 "-preset", "fast",
                 "-crf", "23",
