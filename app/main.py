@@ -937,13 +937,24 @@ async def process_video(job_id: str, source: str, short_length: int, shorts_coun
         video_info = await processor.get_video_info(video_path)
         print(f"[PROCESS] Video info: {video_info}")
         
-        # Если включен умный выбор - транскрибируем всё видео
+        # Если включен умный выбор - транскрибируем разные части видео для анализа
         all_words = []
         if smart_selection:
-            print(f"[PROCESS] Smart selection: transcribing full video...")
+            print(f"[PROCESS] Smart selection: transcribing multiple segments for analysis...")
             try:
-                full_transcript = await processor.get_subtitles(video_path, 0, video_info['duration'])
-                all_words = full_transcript.get("segments", [])
+                duration = video_info['duration']
+                # Берем 5 точек по всему видео и транскрибируем по 30 секунд в каждой
+                num_samples = 5
+                sample_length = 30
+                for i in range(num_samples):
+                    start = int(duration * i / num_samples)
+                    end = min(start + sample_length, duration)
+                    print(f"[PROCESS] Sampling {start}s - {end}s...")
+                    sample = await processor.get_subtitles(video_path, start, end)
+                    for seg in sample.get("segments", []):
+                        seg['start'] += start
+                        seg['end'] += start
+                        all_words.append(seg)
                 print(f"[PROCESS] Got {len(all_words)} words for smart selection")
             except Exception as e:
                 print(f"[PROCESS] Error in smart selection: {e}, falling back to sequential")
