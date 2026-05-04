@@ -1,0 +1,100 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video to Shorts Bot</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+        .card { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); }
+        .progress-bar { transition: width 0.3s ease; }
+    </style>
+</head>
+<body class="min-h-screen text-white">
+    <div class="container mx-auto px-4 py-8 max-w-4xl">
+        <header class="text-center mb-8 relative">
+            <div class="absolute top-0 left-0">
+                <button onclick="window.location.href='/notes'" class="px-4 py-2 rounded-xl bg-yellow-600 hover:bg-yellow-700 transition text-sm">
+                    📝 Заметки
+                </button>
+            </div>
+            <div class="absolute top-0 right-0">
+                <div class="flex items-center gap-3">
+                    <button onclick="window.location.href='/admin'" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 transition text-sm">
+                        📊 Админ-панель
+                    </button>
+                    <span id="username-display" class="text-gray-400"></span>
+                    <button id="logout-btn" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 transition text-sm">
+                        Выход
+                    </button>
+                </div>
+            </div>
+            <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-pink-500 to-purple-500 bg-clip-text text-transparent">
+                Video to Shorts
+            </h1>
+            <p class="text-gray-400">Превращай длинные видео в shоrts</p>
+        </header>
+
+        <div class="card rounded-2xl p-6 mb-8">
+            <div class="flex gap-4 mb-6">
+                <button id="tab-url" class="flex-1 py-3 rounded-xl font-medium bg-purple-600 hover:bg-purple-700 transition">
+                    YouTube URL
+                </button>
+                <button id="tab-file" class="flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition">
+                    Файл
+                </button>
+                <button id="tab-settings" class="flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition">
+                    ⚙️ Настройки
+                </button>
+                <button id="tab-integration" class="flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition">
+                    🚀 Интеграция
+                </button>
+            </div>
+
+            <div id="section-url">
+                <input type="text" id="video-url" placeholder="Вставь ссылку на YouTube видео" 
+                    class="w-full p-4 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none mb-4">
+                
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Длина шорта (сек)</label>
+                        <input type="number" id="short-length" value="45" min="15" max="60"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Кол-во шортов</label>
+                        <input type="number" id="shorts-count" value="5" min="1" max="100"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <button id="create-btn" class="w-full py-4 rounded-xl font-bold text-lg bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 transition">
+                    Создать шорты 🚀
+                </button>
+            </div>
+
+            <div id="section-file" class="hidden">
+                <div class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center mb-4">
+                    <input type="file" id="video-file" accept="video/*" class="hidden">
+                    <label for="video-file" class="cursor-pointer">
+                        <div class="text-4xl mb-2">📁</div>
+                        <p class="text-gray-400">Перетащи файл или выбери</p>
+                        <p id="file-name" class="text-purple-400 mt-2 text-sm hidden"></p>
+                    </label>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Длина шорта (сек)</label>
+                        <input type="number" id="short-length-file" value="45" min="15" max="60"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Кол-во шортов</label>
+                        <input type="number" id="shorts-count-file" value="5" min="1" max="100"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                </div>
+

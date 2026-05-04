@@ -1,0 +1,11 @@
+fastapi==0.109.0
+uvicorn==0.27.0
+python-multipart==0.0.6
+yt-dlp==2024.1.5
+ffmpeg-python==0.2.0
+python-dotenv==1.0.0
+aiofiles==23.2.1
+groq
+faster-whisper
+undetected-chromedriver
+webdriver-manager

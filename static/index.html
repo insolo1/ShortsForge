@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Бот для Shorts</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+        .card { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); }
+        .progress-bar { transition: width 0.3s ease; }
+    </style>
+</head>
+<body class="min-h-screen text-white">
+    <div class="container mx-auto px-4 py-8 max-w-4xl">
+        <header class="text-center mb-8 relative">
+            <div class="absolute top-0 left-0">
+                <button onclick="window.location.href='/notes'" class="px-4 py-2 rounded-xl bg-yellow-600 hover:bg-yellow-700 transition text-sm">
+                    Заметки
+                </button>
+            </div>
+            <div class="absolute top-0 right-0">
+                <div class="flex items-center gap-3">
+                    <button onclick="window.location.href='/admin'" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 transition text-sm">
+                        Админ
+                    </button>
+                    <span id="username-display" class="text-gray-400"></span>
+                    <button id="logout-btn" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 transition text-sm">
+                        Выход
+                    </button>
+                </div>
+            </div>
+            <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-pink-500 to-purple-500 bg-clip-text text-transparent">
+                Видео в Shorts
+            </h1>
+            <p class="text-gray-400">Конвертация длинных видео в короткие ролики</p>
+        </header>
+
+        <div class="card rounded-2xl p-6 mb-8">
+            <div class="flex gap-4 mb-6">
+                <button id="tab-url" class="flex-1 py-3 rounded-xl font-medium bg-purple-600 hover:bg-purple-700 transition">
+                    YouTube URL
+                </button>
+                <button id="tab-file" class="flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition">
+                    Файл
+                </button>
+                <button id="tab-settings" class="flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition">
+                    Настройки
+                </button>
+                <button id="tab-integration" class="flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition">
+                    Интеграция
+                </button>
+            </div>
+
+            <div id="section-url">
+                <input type="text" id="video-url" placeholder="Вставьте ссылку YouTube"
+                    class="w-full p-4 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none mb-4">
+                
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Длина (сек)</label>
+                        <input type="number" id="short-length" value="45" min="15" max="60"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Количество</label>
+                        <input type="number" id="shorts-count" value="5" min="1" max="100"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <h4 class="text-md font-semibold mb-3 mt-6">Музыка для видео</h4>
+                
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">Аудио файл (MP3, WAV)</label>
+                    <input type="file" id="audio-file-url" accept="audio/*"
+                        class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none mb-3">
+                    
+                    <div class="flex items-center gap-2 mb-3">
+                        <input type="checkbox" id="enable-audio-url" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Включить музыку</span>
+                    </div>
+                    
+                    <div id="audio-settings-url" class="hidden">
+                        <label class="block text-sm text-gray-400 mb-2">Выбрать отрывок (секунды)</label>
+                        <div class="grid grid-cols-2 gap-4 mb-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Начало</label>
+                                <input type="number" id="audio-start-url" value="0" min="0"
+                                    class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Конец</label>
+                                <input type="number" id="audio-end-url" value="30" min="1"
+                                    class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <input type="checkbox" id="replace-audio-url" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                            <span class="text-sm text-gray-400">Заменить оригинальный звук</span>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="create-btn" class="w-full py-4 rounded-xl font-bold text-lg bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 transition">
+                    Создать Shorts
+                </button>
+            </div>
+
+            <div id="section-file" class="hidden">
+                <div class="border-2 border-dashed border-gray-600 rounded-xl p-8 text-center mb-4">
+                    <input type="file" id="video-file" accept="video/*" class="hidden">
+                    <label for="video-file" class="cursor-pointer">
+                        <div class="text-4xl mb-2">📁</div>
+                        <p class="text-gray-400">Перетащите файл или нажмите</p>
+                        <p id="file-name" class="text-purple-400 mt-2 text-sm hidden"></p>
+                    </label>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Длина (сек)</label>
+                        <input type="number" id="short-length-file" value="45" min="15" max="60"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Количество</label>
+                        <input type="number" id="shorts-count-file" value="5" min="1" max="100"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <h4 class="text-md font-semibold mb-3 mt-6">Музыка для видео</h4>
+                
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">Аудио файл (MP3, WAV)</label>
+                    <input type="file" id="audio-file" accept="audio/*"
+                        class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none mb-3">
+                    
+                    <div class="flex items-center gap-2 mb-3">
+                        <input type="checkbox" id="enable-audio-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Включить музыку</span>
+                    </div>
+                    
+                    <div id="audio-settings-file" class="hidden">
+                        <label class="block text-sm text-gray-400 mb-2">Выбрать отрывок (секунды)</label>
+                        <div class="grid grid-cols-2 gap-4 mb-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Начало</label>
+                                <input type="number" id="audio-start-file" value="0" min="0"
+                                    class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Конец</label>
+                                <input type="number" id="audio-end-file" value="30" min="1"
+                                    class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <input type="checkbox" id="replace-audio-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                            <span class="text-sm text-gray-400">Заменить оригинальный звук</span>
+                        </div>
+                    </div>
+                </div>
+
+                <button id="create-btn-file" class="w-full py-4 rounded-xl font-bold text-lg bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 transition">
+                    Создать Shorts
+                </button>
+            </div>
+
+            <div id="section-settings" class="hidden">
+                <h3 class="text-lg font-semibold mb-4">Настройки субтитров</h3>
+                
+                <!-- 基本设置：字体、样式、大小 -->
+                <div class="grid grid-cols-3 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Шрифт</label>
+                        <select id="subtitle-font" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="Arial">Arial</option>
+                            <option value="Verdana" selected>Verdana</option>
+                            <option value="Impact">Impact</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Стиль</label>
+                        <select id="subtitle-style" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="normal" selected>Обычный</option>
+                            <option value="bold">Жирный</option>
+                            <option value="italic">Наклонный</option>
+                            <option value="bold_italic">Жирный+Наклон</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Размер</label>
+                        <input type="number" id="subtitle-fontsize" value="75" min="20" max="120"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <!-- 颜色和位置 -->
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Цвет текста</label>
+                        <select id="subtitle-color" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="white" selected>Белый</option>
+                            <option value="yellow">Желтый</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Позиция Y (пикс)</label>
+                        <input type="number" id="subtitle-position" value="600" min="50" max="960"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <!-- 边框设置 -->
+                <h4 class="text-md font-semibold mb-3 mt-6">Рамка</h4>
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Обводка (px)</label>
+                        <input type="number" id="subtitle-borderw" value="6" min="0" max="20"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Цвет обводки</label>
+                        <select id="subtitle-bordercolor" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="black" selected>Черный</option>
+                            <option value="white">Белый</option>
+                            <option value="yellow">Желтый</option>
+                            <option value="none">Нет</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 背景框设置 -->
+                <h4 class="text-md font-semibold mb-3 mt-6">Фон</h4>
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Фон рамки (px)</label>
+                        <input type="number" id="subtitle-boxborder" value="20" min="0" max="50"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Цвет фона</label>
+                        <select id="subtitle-boxcolor" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="black@0.8" selected>Черный (80%)</option>
+                            <option value="black@0.5">Черный (50%)</option>
+                            <option value="none">Нет</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 阴影设置 -->
+                <h4 class="text-md font-semibold mb-3 mt-6">Тень</h4>
+                <div class="grid grid-cols-3 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Смещение X</label>
+                        <input type="number" id="subtitle-shadowx" value="3" min="0" max="10"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Смещение Y</label>
+                        <input type="number" id="subtitle-shadowy" value="3" min="0" max="10"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Цвет тени</label>
+                        <select id="subtitle-shadowcolor" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="black" selected>Черный</option>
+                            <option value="gray">Серый</option>
+                            <option value="none">Нет</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 大写设置 -->
+                <div class="mb-4">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="subtitle-capitalize" checked class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Делать текст заглавным (CAPS)</span>
+                    </label>
+                </div>
+
+                <button id="save-settings-btn" class="w-full py-3 rounded-xl font-bold bg-green-600 hover:bg-green-700 transition">
+                    Сохранить настройки
+                </button>
+            </div>
+
+            <div id="section-settings" class="hidden">
+                <h3 class="text-lg font-semibold mb-4">Настройки субтитров</h3>
+                
+                <!-- 基本设置：字体、样式、大小 -->
+                <div class="grid grid-cols-3 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Шрифт</label>
+                        <select id="subtitle-font" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="Arial">Arial</option>
+                            <option value="Verdana" selected>Verdana</option>
+                            <option value="Impact">Impact</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Стиль</label>
+                        <select id="subtitle-style" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="normal" selected>Обычный</option>
+                            <option value="bold">Жирный</option>
+                            <option value="italic">Наклонный</option>
+                            <option value="bold_italic">Жирный+Наклон</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Размер</label>
+                        <input type="number" id="subtitle-fontsize" value="75" min="20" max="120"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <!-- 颜色和位置 -->
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Цвет текста</label>
+                        <select id="subtitle-color" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="white" selected>Белый</option>
+                            <option value="yellow">Желтый</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Позиция Y (пикс)</label>
+                        <input type="number" id="subtitle-position" value="600" min="50" max="960"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <!-- 边框设置 -->
+                <h4 class="text-md font-semibold mb-3 mt-6">Рамка</h4>
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Обводка (px)</label>
+                        <input type="number" id="subtitle-borderw" value="6" min="0" max="20"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Цвет обводки</label>
+                        <select id="subtitle-bordercolor" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="black" selected>Черный</option>
+                            <option value="white">Белый</option>
+                            <option value="yellow">Желтый</option>
+                            <option value="none">Нет</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 背景框设置 -->
+                <h4 class="text-md font-semibold mb-3 mt-6">Фон</h4>
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Фон рамки (px)</label>
+                        <input type="number" id="subtitle-boxborder" value="20" min="0" max="50"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Цвет фона</label>
+                        <select id="subtitle-boxcolor" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="black@0.8" selected>Черный (80%)</option>
+                            <option value="black@0.5">Черный (50%)</option>
+                            <option value="none">Нет</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 阴影设置 -->
+                <h4 class="text-md font-semibold mb-3 mt-6">Тень</h4>
+                <div class="grid grid-cols-3 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Смещение X</label>
+                        <input type="number" id="subtitle-shadowx" value="3" min="0" max="10"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Смещение Y</label>
+                        <input type="number" id="subtitle-shadowy" value="3" min="0" max="10"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Цвет тени</label>
+                        <select id="subtitle-shadowcolor" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="black" selected>Черный</option>
+                            <option value="gray">Серый</option>
+                            <option value="none">Нет</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 大写设置 -->
+                <div class="mb-4">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="subtitle-capitalize" checked class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Делать текст заглавным (CAPS)</span>
+                    </label>
+                </div>
+
+                <button id="save-settings-btn" class="w-full py-3 rounded-xl font-bold bg-green-600 hover:bg-green-700 transition">
+                    Сохранить настройки
+                </button>
+            </div>
+            
+            <div id="section-integration" class="hidden">
+                <h3 class="text-lg font-semibold mb-4">Интеграция с YouTube</h3>
+                
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">Заметки</label>
+                    <textarea id="integration-notes" rows="3" placeholder="Заметки..."
+                        class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none text-sm"></textarea>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">Источник</label>
+                    <select id="integration-source" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                        <option value="url">YouTube URL</option>
+                        <option value="file">Файл</option>
+                    </select>
+                </div>
+
+                <div id="integration-url-input">
+                    <label class="block text-sm text-gray-400 mb-2">YouTube URL</label>
+                    <input type="text" id="integration-video-url" placeholder="https://youtube.com/watch?v=..."
+                        class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                </div>
+
+                <div id="integration-file-input" class="mb-4 hidden">
+                    <label class="block text-sm text-gray-400 mb-2">Файл</label>
+                    <input type="file" id="integration-video-file" accept="video/*"
+                        class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Длина (сек)</label>
+                        <input type="number" id="integration-short-length" value="45" min="10" max="60"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Количество</label>
+                        <input type="number" id="integration-shorts-count" value="1" min="1" max="300"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <h4 class="text-md font-semibold mb-3 mt-6">Музыка для видео</h4>
+                
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">Аудио файл (MP3, WAV)</label>
+                    <input type="file" id="integration-audio-file" accept="audio/*"
+                        class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none mb-3">
+                    
+                    <div class="flex items-center gap-2 mb-3">
+                        <input type="checkbox" id="enable-audio" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Включить музыку</span>
+                    </div>
+                    
+                    <div id="audio-settings" class="hidden">
+                        <label class="block text-sm text-gray-400 mb-2">Выбрать отрывок (секунды)</label>
+                        <div class="grid grid-cols-2 gap-4 mb-3">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Начало</label>
+                                <input type="number" id="audio-start" value="0" min="0"
+                                    class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Конец</label>
+                                <input type="number" id="audio-end" value="30" min="1"
+                                    class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <input type="checkbox" id="replace-audio" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                            <span class="text-sm text-gray-400">Заменить оригинальный звук</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <h4 class="text-md font-semibold mb-3 mt-6">Теги</h4>
+                
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">Обязательные теги (через запятую)</label>
+                    <input type="text" id="required-tags" placeholder="shorts, viral, trending"
+                        class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none mb-3">
+                    
+                    <div class="flex items-center gap-2 mb-3">
+                        <input type="checkbox" id="enable-required-tags" checked class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Добавлять обязательные теги</span>
+                    </div>
+                    
+                    <div class="flex items-center gap-2">
+                        <input type="checkbox" id="enable-optional-tags" checked class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Генерировать дополнительные теги AI</span>
+                    </div>
+                </div>
+                
+                <h4 class="text-md font-semibold mb-3 mt-6">Аккаунты YouTube</h4>
+
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">Аккаунты YouTube (по одному на строку)</label>
+                    <textarea id="youtube-accounts" rows="3" placeholder="email1@gmail.com&#10;email2@gmail.com"
+                        class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none font-mono text-sm"></textarea>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Видео в день</label>
+                        <input type="number" id="videos-per-day" value="3" min="1" max="10"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Режим</label>
+                        <select id="distribution-mode" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="equal">Поровну</option>
+                            <option value="custom">Вручную</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div id="custom-distribution-input" class="hidden mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">Количество через запятую</label>
+                    <input type="text" id="custom-distribution" placeholder="3,2,5"
+                        class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                </div>
+
+                <h4 class="text-md font-semibold mb-3 mt-6">Отложенная публикация</h4>
+                
+                <div class="mb-4">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="enable-scheduled" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Включить отложенную публикацию</span>
+                    </label>
+                </div>
+
+                <div id="scheduled-options" class="hidden mb-4">
+                    <div class="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-2">Дата</label>
+                            <input type="date" id="schedule-start-date"
+                                class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-2">Время</label>
+                            <input type="time" id="schedule-start-time" value="12:00"
+                                class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                        </div>
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-sm text-gray-400 mb-2">Интервал (минуты)</label>
+                        <input type="number" id="schedule-interval" value="60" min="1"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                </div>
+
+                <h4 class="text-md font-semibold mb-3 mt-6">Шаблоны</h4>
+                
+                <div class="mb-4">
+                    <div class="flex gap-2 mb-3">
+                        <input type="text" id="preset-name" placeholder="Название шаблона"
+                            class="flex-1 p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                        <button id="save-preset-btn" class="px-6 py-3 rounded-xl font-bold bg-blue-600 hover:bg-blue-700 transition">
+                            Сохранить
+                        </button>
+                    </div>
+                    <select id="load-preset" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                        <option value="">-- Загрузить шаблон --</option>
+                    </select>
+                </div>
+
+                <button id="start-integration-btn" class="w-full py-4 rounded-xl font-bold text-lg bg-gradient-to-r from-green-500 to-blue-600 hover:from-green-600 hover:to-blue-700 transition">
+                    Запустить публикацию
+                </button>
+
+                 <div id="logs-window" class="hidden mb-4 p-4 bg-gray-900 rounded-xl border border-gray-700">
+                     <div class="flex justify-between items-center mb-3">
+                         <h4 class="text-sm font-semibold">Логи</h4>
+                         <button id="clear-logs-btn" class="px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600">Очистить</button>
+                     </div>
+                     <div id="logs-content" class="bg-black rounded p-3 h-64 overflow-y-auto font-mono text-xs text-green-400">
+                         <div class="text-gray-500">Ожидание...</div>
+                     </div>
+                 </div>
+                 
+                 <!-- Этапы для интеграции -->
+                 <div id="integration-stages-window" class="hidden mb-4 p-4 bg-gray-900 rounded-xl border border-gray-700">
+                     <h4 class="text-sm font-semibold mb-3">Этапы автопубликации</h4>
+                     <div id="integration-stages-list" class="space-y-2">
+                         <div class="text-gray-500 text-sm">Ожидание запуска...</div>
+                     </div>
+                 </div>
+            </div>
+        </div>
+
+        <div class="card rounded-2xl p-6 mb-8">
+            <h3 class="text-lg font-semibold mb-4">Настройка аккаунтов YouTube</h3>
+            
+            <div class="mb-4 p-4 bg-gray-800 rounded-xl border border-gray-700">
+                <h4 class="text-sm font-semibold mb-2">Загрузка учетных данных</h4>
+                <p class="text-xs text-gray-400 mb-3">Файл client_secret.json</p>
+                
+                <label class="block text-sm text-gray-400 mb-2">Email</label>
+                <input type="email" id="manual-account-email" placeholder="email@gmail.com"
+                    class="w-full p-3 rounded-xl bg-gray-900 border border-gray-600 focus:border-blue-500 focus:outline-none mb-3">
+                
+                <label class="block text-sm text-gray-400 mb-2">client_secret.json</label>
+                <input type="file" id="manual-credentials-file" accept=".json"
+                    class="w-full p-3 rounded-xl bg-gray-900 border border-gray-600 focus:border-blue-500 focus:outline-none mb-3">
+                
+                <button id="upload-credentials-btn" class="w-full py-3 rounded-xl font-bold bg-green-600 hover:bg-green-700 transition">
+                    Добавить аккаунт
+                </button>
+            </div>
+            
+            <div class="mb-4">
+                <button id="authorize-accounts-btn" class="w-full py-3 rounded-xl font-bold bg-blue-600 hover:bg-blue-700 transition">
+                    Авторизовать
+                </button>
+                <p class="text-xs text-gray-500 mt-2">Откроется браузер</p>
+            </div>
+            
+            <div id="saved-accounts-list" class="p-4 bg-gray-800 rounded-xl border border-gray-700">
+                <div class="flex justify-between items-center mb-2">
+                    <h4 class="text-sm font-semibold">Сохраненные аккаунты</h4>
+                    <button type="button" id="refresh-accounts-btn" 
+                        class="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 transition text-xs">
+                        🔄 Обновить
+                    </button>
+                </div>
+                <div id="accounts-list" class="text-sm text-gray-400">
+                    <p class="text-gray-500">Нет аккаунтов</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="progress-section" class="card rounded-2xl p-6 mb-8 hidden">
+        <h3 class="text-xl font-semibold mb-4">Обработка...</h3>
+        <div class="h-4 bg-gray-700 rounded-full overflow-hidden mb-2">
+            <div id="progress-bar" class="progress-bar h-full bg-gradient-to-r from-pink-500 to-purple-500" style="width: 0%"></div>
+        </div>
+        <p id="progress-text" class="text-gray-400 text-center mb-4">Загрузка...</p>
+        
+        <!-- Интерактивное окно этапов -->
+        <div id="stages-window" class="p-4 bg-gray-900 rounded-xl border border-gray-700">
+            <h4 class="text-sm font-semibold mb-3">Этапы обработки</h4>
+            <div id="stages-list" class="space-y-2">
+                <div class="text-gray-500 text-sm">Ожидание запуска...</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="results-section" class="hidden">
+        <h2 class="text-2xl font-bold mb-6">Готовые Shorts</h2>
+        <div id="shorts-list" class="space-y-6"></div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

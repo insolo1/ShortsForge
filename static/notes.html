@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Заметки - Video to Shorts Bot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+        .card { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); }
+    </style>
+</head>
+<body class="min-h-screen text-white">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <header class="text-center mb-8 relative">
+            <div class="absolute top-0 right-0">
+                <div class="flex items-center gap-3">
+                    <button onclick="window.location.href='/'" class="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 transition text-sm">
+                        ← Назад
+                    </button>
+                    <button onclick="window.location.href='/admin'" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 transition text-sm">
+                        📊 Админ-панель
+                    </button>
+                    <span id="username-display" class="text-gray-400"></span>
+                    <button id="logout-btn" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 transition text-sm">
+                        Выход
+                    </button>
+                </div>
+            </div>
+            <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-yellow-500 to-orange-500 bg-clip-text text-transparent">
+                📝 Заметки
+            </h1>
+            <p class="text-gray-400">Записывай идеи и планы</p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Список заметок -->
+            <div class="lg:col-span-1">
+                <div class="card rounded-2xl p-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-bold">Мои заметки</h2>
+                        <button id="new-note-btn" class="px-4 py-2 rounded-xl bg-green-600 hover:bg-green-700 transition text-sm">
+                            + Новая
+                        </button>
+                    </div>
+                    <div id="notes-list" class="space-y-2 max-h-[600px] overflow-y-auto">
+                        <!-- Заметки будут здесь -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Редактор заметки -->
+            <div class="lg:col-span-2">
+                <div class="card rounded-2xl p-6">
+                    <div id="editor-empty" class="text-center text-gray-400 py-20">
+                        <div class="text-6xl mb-4">📝</div>
+                        <p>Выбери заметку или создай новую</p>
+                    </div>
+
+                    <div id="editor-content" class="hidden">
+                        <input type="text" id="note-title" placeholder="Название заметки" 
+                            class="w-full p-4 rounded-xl bg-gray-800 border border-gray-700 focus:border-yellow-500 focus:outline-none mb-4 text-xl font-bold">
+                        
+                        <textarea id="note-content" rows="20" placeholder="Начни писать..."
+                            class="w-full p-4 rounded-xl bg-gray-800 border border-gray-700 focus:border-yellow-500 focus:outline-none mb-4 resize-none"></textarea>
+                        
+                        <div class="flex gap-3">
+                            <button id="save-note-btn" class="flex-1 py-3 rounded-xl font-bold bg-green-600 hover:bg-green-700 transition">
+                                💾 Сохранить
+                            </button>
+                            <button id="delete-note-btn" class="px-6 py-3 rounded-xl font-bold bg-red-600 hover:bg-red-700 transition">
+                                🗑️ Удалить
+                            </button>
+                        </div>
+                        
+                        <div class="mt-4 text-sm text-gray-400 text-right">
+                            <span id="note-date"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let notes = JSON.parse(localStorage.getItem('videobot_notes') || '[]');
+        let currentNoteId = null;
+
+        // Проверка авторизации
+        function getCookie(name) {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return parts.pop().split(';').shift();
+        }
+
+        const token = getCookie('token');
+        if (!token) {
+            window.location.href = '/login';
+        }
+
+        // Получаем имя пользователя из localStorage
+        const username = localStorage.getItem('username');
+        if (username) {
+            document.getElementById('username-display').textContent = username;
+        }
+
+        // Logout
+        document.getElementById('logout-btn').addEventListener('click', async () => {
+            await fetch('/api/logout', { method: 'POST' });
+            localStorage.removeItem('username');
+            document.cookie = 'token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+            window.location.href = '/login';
+        });
+
+        // Загрузка списка заметок
+        function loadNotesList() {
+            const list = document.getElementById('notes-list');
+            list.innerHTML = '';
+
+            if (notes.length === 0) {
+                list.innerHTML = '<div class="text-gray-400 text-sm text-center py-4">Нет заметок</div>';
+                return;
+            }
+
+            notes.sort((a, b) => new Date(b.updated) - new Date(a.updated));
+
+            notes.forEach(note => {
+                const div = document.createElement('div');
+                div.className = `p-3 rounded-xl cursor-pointer transition ${currentNoteId === note.id ? 'bg-yellow-600' : 'bg-gray-700 hover:bg-gray-600'}`;
+                div.onclick = () => loadNote(note.id);
+                
+                const title = document.createElement('div');
+                title.className = 'font-semibold truncate';
+                title.textContent = note.title || 'Без названия';
+                
+                const date = document.createElement('div');
+                date.className = 'text-xs text-gray-400 mt-1';
+                date.textContent = new Date(note.updated).toLocaleString('ru-RU');
+                
+                div.appendChild(title);
+                div.appendChild(date);
+                list.appendChild(div);
+            });
+        }
+
+        // Создание новой заметки
+        document.getElementById('new-note-btn').addEventListener('click', () => {
+            const newNote = {
+                id: Date.now().toString(),
+                title: '',
+                content: '',
+                created: new Date().toISOString(),
+                updated: new Date().toISOString()
+            };
+            notes.push(newNote);
+            saveNotes();
+            loadNote(newNote.id);
+            loadNotesList();
+        });
+
+        // Загрузка заметки
+        function loadNote(id) {
+            const note = notes.find(n => n.id === id);
+            if (!note) return;
+
+            currentNoteId = id;
+            document.getElementById('editor-empty').classList.add('hidden');
+            document.getElementById('editor-content').classList.remove('hidden');
+            document.getElementById('note-title').value = note.title;
+            document.getElementById('note-content').value = note.content;
+            document.getElementById('note-date').textContent = `Обновлено: ${new Date(note.updated).toLocaleString('ru-RU')}`;
+            
+            loadNotesList();
+        }
+
+        // Сохранение заметки
+        document.getElementById('save-note-btn').addEventListener('click', () => {
+            if (!currentNoteId) return;
+
+            const note = notes.find(n => n.id === currentNoteId);
+            if (!note) return;
+
+            note.title = document.getElementById('note-title').value;
+            note.content = document.getElementById('note-content').value;
+            note.updated = new Date().toISOString();
+
+            saveNotes();
+            loadNotesList();
+            document.getElementById('note-date').textContent = `Обновлено: ${new Date(note.updated).toLocaleString('ru-RU')}`;
+
+            // Показываем уведомление
+            const btn = document.getElementById('save-note-btn');
+            const oldText = btn.textContent;
+            btn.textContent = '✓ Сохранено';
+            setTimeout(() => btn.textContent = oldText, 1000);
+        });
+
+        // Удаление заметки
+        document.getElementById('delete-note-btn').addEventListener('click', () => {
+            if (!currentNoteId) return;
+            if (!confirm('Удалить эту заметку?')) return;
+
+            notes = notes.filter(n => n.id !== currentNoteId);
+            saveNotes();
+            currentNoteId = null;
+            
+            document.getElementById('editor-empty').classList.remove('hidden');
+            document.getElementById('editor-content').classList.add('hidden');
+            loadNotesList();
+        });
+
+        // Сохранение в localStorage
+        function saveNotes() {
+            localStorage.setItem('videobot_notes', JSON.stringify(notes));
+        }
+
+        // Автосохранение каждые 30 секунд
+        setInterval(() => {
+            if (currentNoteId) {
+                const note = notes.find(n => n.id === currentNoteId);
+                if (note) {
+                    note.title = document.getElementById('note-title').value;
+                    note.content = document.getElementById('note-content').value;
+                    note.updated = new Date().toISOString();
+                    saveNotes();
+                }
+            }
+        }, 30000);
+
+        // Инициализация
+        loadNotesList();
+    </script>
+</body>
+</html>

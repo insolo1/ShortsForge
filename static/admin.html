@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Админ-панель - Analytics</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+        .card { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); }
+    </style>
+</head>
+<body class="min-h-screen text-white">
+    <div class="container mx-auto px-4 py-8 max-w-7xl">
+        <header class="mb-8 flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold bg-gradient-to-r from-pink-500 to-purple-500 bg-clip-text text-transparent">
+                    Админ-панель
+                </h1>
+                <p class="text-gray-400">Аналитика и управление видео</p>
+            </div>
+            <div class="flex gap-3">
+                <button onclick="window.location.href='/'" class="px-4 py-2 rounded-xl bg-gray-700 hover:bg-gray-600 transition">
+                    ← Назад
+                </button>
+                <button id="refresh-btn" class="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 transition">
+                    🔄 Обновить
+                </button>
+            </div>
+        </header>
+
+        <!-- Общая статистика -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div class="card rounded-xl p-6">
+                <div class="text-gray-400 text-sm mb-2">Всего видео</div>
+                <div class="text-3xl font-bold" id="total-videos">0</div>
+                <div class="text-green-400 text-sm mt-1" id="videos-change">+0 за сегодня</div>
+            </div>
+            <div class="card rounded-xl p-6">
+                <div class="text-gray-400 text-sm mb-2">Просмотры</div>
+                <div class="text-3xl font-bold" id="total-views">0</div>
+                <div class="text-green-400 text-sm mt-1" id="views-change">+0 за сегодня</div>
+            </div>
+            <div class="card rounded-xl p-6">
+                <div class="text-gray-400 text-sm mb-2">Подписчики</div>
+                <div class="text-3xl font-bold" id="total-subscribers">0</div>
+                <div class="text-green-400 text-sm mt-1" id="subscribers-change">+0 за сегодня</div>
+            </div>
+            <div class="card rounded-xl p-6">
+                <div class="text-gray-400 text-sm mb-2">Средний CTR</div>
+                <div class="text-3xl font-bold" id="avg-ctr">0%</div>
+                <div class="text-gray-400 text-sm mt-1">Click-through rate</div>
+            </div>
+        </div>
+
+        <!-- Графики -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div class="card rounded-xl p-6">
+                <h3 class="text-lg font-semibold mb-4">Просмотры за 7 дней</h3>
+                <canvas id="views-chart"></canvas>
+            </div>
+            <div class="card rounded-xl p-6">
+                <h3 class="text-lg font-semibold mb-4">Прирост подписчиков</h3>
+                <canvas id="subscribers-chart"></canvas>
+            </div>
+        </div>
+
+        <!-- Список аккаунтов -->
+        <div class="card rounded-xl p-6 mb-8">
+            <h3 class="text-xl font-semibold mb-4">YouTube аккаунты</h3>
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr class="border-b border-gray-700">
+                            <th class="text-left py-3 px-4">Email</th>
+                            <th class="text-left py-3 px-4">Видео</th>
+                            <th class="text-left py-3 px-4">Просмотры</th>
+                            <th class="text-left py-3 px-4">Подписчики</th>
+                            <th class="text-left py-3 px-4">Статус</th>
+                            <th class="text-left py-3 px-4">Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody id="accounts-list">
+                        <!-- Заполняется JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Список видео -->
+        <div class="card rounded-xl p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-semibold">Последние видео</h3>
+                <select id="sort-by" class="px-4 py-2 rounded-xl bg-gray-800 border border-gray-700">
+                    <option value="date">По дате</option>
+                    <option value="views">По просмотрам</option>
+                    <option value="ctr">По CTR</option>
+                </select>
+            </div>
+            <div class="space-y-4" id="videos-list">
+                <!-- Заполняется JS -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let viewsChart, subscribersChart;
+
+        async function loadAnalytics() {
+            try {
+                const response = await fetch('/api/admin/analytics');
+                const data = await response.json();
+                
+                // Обновляем общую статистику
+                document.getElementById('total-videos').textContent = data.total_videos;
+                document.getElementById('total-views').textContent = formatNumber(data.total_views);
+                document.getElementById('total-subscribers').textContent = formatNumber(data.total_subscribers);
+                document.getElementById('avg-ctr').textContent = data.avg_ctr.toFixed(1) + '%';
+                
+                document.getElementById('videos-change').textContent = '+' + data.videos_today + ' за сегодня';
+                document.getElementById('views-change').textContent = '+' + formatNumber(data.views_today) + ' за сегодня';
+                document.getElementById('subscribers-change').textContent = '+' + data.subscribers_today + ' за сегодня';
+                
+                // Обновляем графики
+                updateCharts(data.views_7days, data.subscribers_7days);
+                
+                // Обновляем список аккаунтов
+                updateAccountsList(data.accounts);
+                
+                // Обновляем список видео
+                updateVideosList(data.videos);
+                
+            } catch (error) {
+                console.error('Error loading analytics:', error);
+            }
+        }
+
+        function updateCharts(viewsData, subscribersData) {
+            const labels = viewsData.map(d => d.date);
+            
+            // График просмотров
+            if (viewsChart) viewsChart.destroy();
+            const viewsCtx = document.getElementById('views-chart').getContext('2d');
+            viewsChart = new Chart(viewsCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Просмотры',
+                        data: viewsData.map(d => d.count),
+                        borderColor: 'rgb(236, 72, 153)',
+                        backgroundColor: 'rgba(236, 72, 153, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } },
+                        x: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } }
+                    }
+                }
+            });
+            
+            // График подписчиков
+            if (subscribersChart) subscribersChart.destroy();
+            const subsCtx = document.getElementById('subscribers-chart').getContext('2d');
+            subscribersChart = new Chart(subsCtx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Подписчики',
+                        data: subscribersData.map(d => d.count),
+                        backgroundColor: 'rgba(168, 85, 247, 0.8)',
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } },
+                        x: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } }
+                    }
+                }
+            });
+        }
+
+        function updateAccountsList(accounts) {
+            const list = document.getElementById('accounts-list');
+            list.innerHTML = accounts.map(acc => `
+                <tr class="border-b border-gray-700 hover:bg-gray-800/50">
+                    <td class="py-3 px-4">${acc.email}</td>
+                    <td class="py-3 px-4">${acc.videos_count}</td>
+                    <td class="py-3 px-4">${formatNumber(acc.views)}</td>
+                    <td class="py-3 px-4">${formatNumber(acc.subscribers)}</td>
+                    <td class="py-3 px-4">
+                        <span class="px-2 py-1 rounded text-xs ${acc.status === 'active' ? 'bg-green-600' : 'bg-red-600'}">
+                            ${acc.status === 'active' ? 'Активен' : 'Неактивен'}
+                        </span>
+                    </td>
+                    <td class="py-3 px-4">
+                        <button onclick="viewAccount('${acc.email}')" class="text-purple-400 hover:text-purple-300">
+                            Подробнее →
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function updateVideosList(videos) {
+            const list = document.getElementById('videos-list');
+            list.innerHTML = videos.map(video => `
+                <div class="card rounded-xl p-4 flex gap-4">
+                    <img src="${video.thumbnail}" class="w-32 h-20 rounded object-cover" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22120%22 height=%2280%22%3E%3Crect fill=%22%23374151%22 width=%22120%22 height=%2280%22/%3E%3C/svg%3E'">
+                    <div class="flex-1">
+                        <h4 class="font-semibold mb-1">${video.title}</h4>
+                        <p class="text-sm text-gray-400 mb-2">${video.account}</p>
+                        <div class="flex gap-4 text-sm">
+                            <span>👁 ${formatNumber(video.views)} просмотров</span>
+                            <span>👍 ${formatNumber(video.likes)} лайков</span>
+                            <span>💬 ${formatNumber(video.comments)} комментариев</span>
+                            <span>📊 CTR: ${video.ctr}%</span>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-sm text-gray-400">${video.published_date}</div>
+                        <a href="${video.url}" target="_blank" class="text-purple-400 hover:text-purple-300 text-sm">
+                            Открыть →
+                        </a>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function formatNumber(num) {
+            if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+            return num.toString();
+        }
+
+        function viewAccount(email) {
+            alert('Подробная информация об аккаунте: ' + email);
+        }
+
+        document.getElementById('refresh-btn').addEventListener('click', loadAnalytics);
+        document.getElementById('sort-by').addEventListener('change', loadAnalytics);
+
+        // Загружаем данные при старте
+        loadAnalytics();
+        
+        // Автообновление каждые 5 минут
+        setInterval(loadAnalytics, 300000);
+    </script>
+</body>
+</html>
