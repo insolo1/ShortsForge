@@ -1,0 +1,62 @@
+Основные команды Git:
+
+Настройка:
+
+git config --global user.name "Имя"
+git config --global user.email "email@example.com"
+Создание и клонирование:
+
+git init              # Создать репозиторий
+git clone <url>       # Клонировать репозиторий
+Основные команды:
+
+git status            # Статус файлов
+git add .             # Добавить все файлы
+git add file.py       # Добавить конкретный файл
+git commit -m "Текст" # Создать коммит
+git log               # История коммитов
+Ветки:
+
+git branch            # Список веток
+git branch name       # Создать ветку
+git checkout name     # Переключиться на ветку
+git merge name        # Слить ветку
+Удалённый репозиторий:
+
+git remote add origin <url>   # Добавить удалённый репозиторий
+git push -u origin master     # Отправить изменения
+git pull                      # Получить изменения
+Отмена изменений:
+
+git restore file.py    # Отменить изменения в файле
+git reset --soft HEAD~1  # Отменить коммит, оставить файлы
+
+
+Дополнительные команды Git:
+
+Просмотр изменений:
+
+git diff              # Изменения в рабочей директории
+git diff --staged     # Изменения в индексе (staging)
+git show <commit>     # Показать конкретный коммит
+История и поиск:
+
+git log --oneline     # Краткая история
+git log --graph       # История с графом веток
+git blame file.py     # Кто и когда менял строки
+git grep "текст"      # Поиск по коду
+Работа с коммитами:
+
+git commit --amend    # Исправить последний коммит
+git rebase master     # Перебазирование
+git reset --hard HEAD # Сброс всех изменений (осторожно!)
+Stash (временное сохранение):
+
+git stash             # Спрятать изменения
+git stash pop         # Вернуть изменения
+git stash list        # Список спрятанного
+Теги:
+
+git tag v1.0         # Создать тег
+git push --tags      # Отправить теги
+

@@ -937,8 +937,18 @@ async def process_video(job_id: str, source: str, short_length: int, shorts_coun
         video_info = await processor.get_video_info(video_path)
         print(f"[PROCESS] Video info: {video_info}")
         
-        print(f"[PROCESS] Extracting segments...")
-        segments = await processor.extract_segments(video_path, short_length, shorts_count)
+        # Сначала транскрибируем всё видео для выбора лучших моментов
+        print(f"[PROCESS] Transcribing full video for best moments...")
+        try:
+            full_transcript = await processor.get_subtitles(video_path, 0, video_info['duration'])
+            all_words = full_transcript.get("segments", [])
+            print(f"[PROCESS] Got {len(all_words)} words/segments for analysis")
+        except Exception as e:
+            print(f"[PROCESS] Error transcribing full video: {e}")
+            all_words = []
+        
+        print(f"[PROCESS] Extracting best segments...")
+        segments = await processor.extract_segments(video_path, short_length, shorts_count, all_words)
         print(f"[PROCESS] Found {len(segments)} segments")
         
         if not segments:
@@ -951,12 +961,12 @@ async def process_video(job_id: str, source: str, short_length: int, shorts_coun
         for i, segment in enumerate(segments):
             print(f"[PROCESS] Processing segment {i+1}/{len(segments)}")
             
-            print(f"[PROCESS] Getting subtitles for segment {i+1}")
-            subtitle_data = await processor.get_subtitles(video_path, segment["start"], segment["end"])
+            # Используем уже полученные субтитры для этого отрезка
+            segment_words = [w for w in all_words if w['start'] >= segment["start"] and w['end'] <= segment["end"]]
             
             print(f"[PROCESS] Creating short {i+1}/{len(segments)}...")
             try:
-                short_path = await processor.create_short(video_path, segment, i, job_id, subtitle_data.get("segments"))
+                short_path = await processor.create_short(video_path, segment, i, job_id, segment_words)
                 print(f"[PROCESS] Short created: {short_path}")
                 
                 if not short_path or not Path(short_path).exists():

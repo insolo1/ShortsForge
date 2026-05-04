@@ -36,13 +36,18 @@ class VideoProcessor:
         print(f"[FFPROBE] Failed to get duration, returning default")
         return 300
     
-    async def extract_segments(self, video_path: str, short_length: int, shorts_count: int) -> List[Dict]:
+    async def extract_segments(self, video_path: str, short_length: int, shorts_count: int, subtitle_segments: List[Dict] = None) -> List[Dict]:
         duration = await self.get_duration(video_path)
         
         if duration < short_length:
             print(f"[PROCESS] Video too short: {duration}s < {short_length}s")
             return []
         
+        # Если есть субтитры - выбираем лучшие моменты по плотности речи
+        if subtitle_segments:
+            return self._find_best_segments(duration, short_length, shorts_count, subtitle_segments)
+        
+        # Иначе просто режем по порядку
         segments = []
         for i in range(min(shorts_count, int(duration // short_length))):
             start = i * short_length
@@ -51,6 +56,47 @@ class VideoProcessor:
         
         print(f"[PROCESS] Found {len(segments)} segments")
         return segments
+    
+    def _find_best_segments(self, duration: float, short_length: int, shorts_count: int, subtitle_segments: List[Dict]) -> List[Dict]:
+        """Находит лучшие отрезки по плотности речи"""
+        import math
+        
+        # Считаем слова для каждого потенциального отрезка
+        best_segments = []
+        
+        # Проходим окном по всему видео с шагом 50%
+        step = short_length // 2
+        candidates = []
+        
+        for start in range(0, int(duration - short_length), step):
+            end = start + short_length
+            # Считаем количество слов в этом отрезке
+            word_count = sum(1 for seg in subtitle_segments if seg['start'] >= start and seg['end'] <= end)
+            candidates.append({"start": float(start), "end": float(end), "words": word_count})
+        
+        # Сортируем по количеству слов (больше = лучше)
+        candidates.sort(key=lambda x: x["words"], reverse=True)
+        
+        # Выбираем топ N непересекающихся отрезков
+        for cand in candidates:
+            # Проверяем, не пересекается ли с уже выбранными
+            overlap = False
+            for sel in best_segments:
+                if cand["start"] < sel["end"] and cand["end"] > sel["start"]:
+                    overlap = True
+                    break
+            
+            if not overlap:
+                best_segments.append(cand)
+            
+            if len(best_segments) >= shorts_count:
+                break
+        
+        # Сортируем по времени начала
+        best_segments.sort(key=lambda x: x["start"])
+        
+        print(f"[PROCESS] Found {len(best_segments)} best segments by speech density")
+        return best_segments
     
     async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None) -> str:
         output_path = self.output_dir / f"short_{job_id}_{index}.mp4"
