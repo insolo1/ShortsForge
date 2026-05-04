@@ -183,7 +183,7 @@ class VideoProcessor:
             segments.append({"start": start, "end": end})
         return segments
     
-    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None) -> str:
+    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False) -> str:
         output_path = self.output_dir / f"short_{job_id}_{index}.mp4"
         
         # Читаем настройки субтитров
@@ -236,7 +236,12 @@ class VideoProcessor:
                         subtitle_shadowcolor = line.split('=')[1].strip().strip('"')
         
         # 9:16 формат
-        filters = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
+        if blurred_bg:
+            # Размытый фон: основное видео по центру + размытая подложка
+            # Используем ; для нескольких фильтров
+            filters = "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[main];[0:v]scale=270:480,boxblur=20[blur];[blur][main]overlay=0:0"
+        else:
+            filters = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
         
         # Субтитры через drawtext (по словам) - записываем в файл через filter_script
         if subtitle_segments:
@@ -301,21 +306,36 @@ class VideoProcessor:
         print(f"[VIDEO] Filter length: {len(filters)} chars")
         print(f"[FILTER] Filter written to file: {filter_file_path}")
         
-        cmd = [
-            r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
-            "-ss", str(segment["start"]),
-            "-i", video_path,
-            "-t", str(segment["end"] - segment["start"]),
-            "-filter_script:v", str(filter_file_path),
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-map", "0:v",
-            "-map", "0:a",
-            str(output_path)
-        ]
+        if blurred_bg:
+            cmd = [
+                r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
+                "-ss", str(segment["start"]),
+                "-i", video_path,
+                "-t", str(segment["end"] - segment["start"]),
+                "-filter_complex", filters,
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                str(output_path)
+            ]
+        else:
+            cmd = [
+                r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
+                "-ss", str(segment["start"]),
+                "-i", video_path,
+                "-t", str(segment["end"] - segment["start"]),
+                "-filter_script:v", str(filter_file_path),
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-map", "0:v",
+                "-map", "0:a",
+                str(output_path)
+            ]
         
         print(f"[FFMPEG] Command: {' '.join(cmd[:10])}...")
         

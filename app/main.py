@@ -702,7 +702,7 @@ async def process_integration(
             add_job_log(job_id, f"[{i+1}/{len(segments)}] Субтитры: {len(subtitle_data.get('segments', []))} фраз", "info")
             
             # Создаём видео с субтитрами
-            short_path = await processor.create_short(video_path, segment, i, job_id, subtitle_data.get("segments"))
+            short_path = await processor.create_short(video_path, segment, i, job_id, subtitle_data.get("segments"), blurred_bg)
             add_job_log(job_id, f"[{i+1}/{len(segments)}] Видео создано", "success")
             
             # Генерируем метаданные (без субтитров)
@@ -822,17 +822,17 @@ async def process_integration(
 
 
 @app.post("/api/upload-url")
-async def upload_url(url: str = Form(...), short_length: int = Form(45), shorts_count: int = Form(5), smart_selection: bool = Form(False)):
+async def upload_url(url: str = Form(...), short_length: int = Form(45), shorts_count: int = Form(5), smart_selection: bool = Form(False), blurred_bg: bool = Form(False)):
     job_id = str(uuid.uuid4())
     jobs[job_id] = {"status": "downloading", "progress": 0, "shorts": []}
     
-    asyncio.create_task(process_video(job_id, url, short_length, shorts_count, smart_selection))
+    asyncio.create_task(process_video(job_id, url, short_length, shorts_count, smart_selection, blurred_bg))
     
     return {"job_id": job_id, "status": "started"}
 
 
 @app.post("/api/upload-file")
-async def upload_file(file: UploadFile = File(...), short_length: int = Form(45), shorts_count: int = Form(5), smart_selection: bool = Form(False)):
+async def upload_file(file: UploadFile = File(...), short_length: int = Form(45), shorts_count: int = Form(5), smart_selection: bool = Form(False), blurred_bg: bool = Form(False)):
     job_id = str(uuid.uuid4())
     
     print(f"[UPLOAD] Starting upload for job: {job_id}, file: {file.filename}")
@@ -848,7 +848,7 @@ async def upload_file(file: UploadFile = File(...), short_length: int = Form(45)
         
         jobs[job_id] = {"status": "processing", "progress": 0, "shorts": []}
         
-        asyncio.create_task(process_video(job_id, str(file_path), short_length, shorts_count, smart_selection))
+        asyncio.create_task(process_video(job_id, str(file_path), short_length, shorts_count, smart_selection, blurred_bg))
         
         return {"job_id": job_id, "status": "started"}
     except Exception as e:
@@ -906,7 +906,7 @@ async def update_short(short_id: str, title: str = Form(...), description: str =
     raise HTTPException(status_code=404, detail="Short not found")
 
 
-async def process_video(job_id: str, source: str, short_length: int, shorts_count: int, smart_selection: bool = False):
+async def process_video(job_id: str, source: str, short_length: int, shorts_count: int, smart_selection: bool = False, blurred_bg: bool = False):
     try:
         print(f"[PROCESS] Starting job: {job_id}, source: {source}")
         
@@ -960,7 +960,7 @@ async def process_video(job_id: str, source: str, short_length: int, shorts_coun
             
             print(f"[PROCESS] Creating short {i+1}/{len(segments)}...")
             try:
-                short_path = await processor.create_short(video_path, segment, i, job_id, subtitle_data.get("segments"))
+                short_path = await processor.create_short(video_path, segment, i, job_id, subtitle_data.get("segments"), blurred_bg)
                 print(f"[PROCESS] Short created: {short_path}")
                 
                 if not short_path or not Path(short_path).exists():
