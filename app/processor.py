@@ -196,7 +196,7 @@ class VideoProcessor:
         subtitle_fontcolor = "white"
         subtitle_position = 600
         subtitle_capitalize = True
-        subtitle_borderw = 6
+        subtitle_borderw = 0
         subtitle_bordercolor = "black"
         subtitle_boxborder = 0
         subtitle_boxcolor = "black@0.8"
