@@ -241,12 +241,15 @@ class VideoProcessor:
         # Субтитры
         if subtitle_segments:
             print(f"[SUBTITLE] Adding {len(subtitle_segments)} words via drawtext")
+            segment_start = segment["start"]
             for seg in subtitle_segments:
                 text = seg['text'].strip().replace("'", "'").replace(":", "\\:")
                 if not text:
                     continue
-                start_time = seg['start']
-                end_time = seg['end']
+                start_time = seg['start'] - segment_start
+                end_time = seg['end'] - segment_start
+                if start_time < 0:
+                    start_time = 0
                 fontcolor_hex = self.color_to_hex(subtitle_fontcolor)
                 enable_expr = f"between(t, {start_time:.3f}, {end_time:.3f})"
                 
@@ -261,10 +264,12 @@ class VideoProcessor:
                 
                 # Border and shadow
                 border_str = f":borderw={subtitle_borderw}:bordercolor={self.color_to_hex(subtitle_bordercolor)}" if subtitle_borderw > 0 else ""
+                # Try outline for better visibility
+                outline_str = f":outline={subtitle_borderw}:outlinecolor={self.color_to_hex(subtitle_bordercolor)}" if subtitle_borderw > 0 else ""
                 shadow_str = f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={self.color_to_hex(subtitle_shadowcolor)}" if subtitle_shadowx > 0 or subtitle_shadowy > 0 else ""
                 box_str = f":box=1:boxborderw={subtitle_boxborder}:boxcolor={self.color_to_hex(subtitle_boxcolor)}" if subtitle_boxborder > 0 else ""
                 
-                dt = f"drawtext=text='{text}':fontfile='{subtitle_font}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}{font_style}{border_str}{shadow_str}{box_str}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
+                dt = f"drawtext=text='{text}':fontfile='{subtitle_font}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}{font_style}{outline_str}{shadow_str}{box_str}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
                 filters += "," + dt
         
         # Write filter to file to avoid WinError 206 (command line too long)
@@ -300,12 +305,15 @@ class VideoProcessor:
             # Добавляем субтитры
             if subtitle_segments:
                 print(f"[SUBTITLE] Adding {len(subtitle_segments)} words via drawtext for blurred bg")
+                segment_start = segment["start"]
                 for seg in subtitle_segments:
                     text = seg['text'].strip().replace("'", "'").replace(":", "\\:")
                     if not text:
                         continue
-                    start_time = seg['start']
-                    end_time = seg['end']
+                    start_time = seg['start'] - segment_start
+                    end_time = seg['end'] - segment_start
+                    if start_time < 0:
+                        start_time = 0
                     fontcolor_hex = self.color_to_hex(subtitle_fontcolor)
                     enable_expr = f"between(t, {start_time:.3f}, {end_time:.3f})"
                     
@@ -318,12 +326,13 @@ class VideoProcessor:
                     elif subtitle_style == "bold_italic":
                         font_style = ":fontweight=bold:fontstyle=italic"
                     
-                    # Border and shadow
-                    border_str = f":borderw={subtitle_borderw}:bordercolor={self.color_to_hex(subtitle_bordercolor)}" if subtitle_borderw > 0 else ""
-                    shadow_str = f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={self.color_to_hex(subtitle_shadowcolor)}" if subtitle_shadowx > 0 or subtitle_shadowy > 0 else ""
-                    box_str = f":box=1:boxborderw={subtitle_boxborder}:boxcolor={self.color_to_hex(subtitle_boxcolor)}" if subtitle_boxborder > 0 else ""
+                # Border and shadow
+                border_str = f":borderw={subtitle_borderw}:bordercolor={self.color_to_hex(subtitle_bordercolor)}" if subtitle_borderw > 0 else ""
+                outline_str = f":outline={subtitle_borderw}:outlinecolor={self.color_to_hex(subtitle_bordercolor)}" if subtitle_borderw > 0 else ""
+                shadow_str = f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={self.color_to_hex(subtitle_shadowcolor)}" if subtitle_shadowx > 0 or subtitle_shadowy > 0 else ""
+                box_str = f":box=1:boxborderw={subtitle_boxborder}:boxcolor={self.color_to_hex(subtitle_boxcolor)}" if subtitle_boxborder > 0 else ""
                     
-                    dt = f",drawtext=text='{text}':fontfile='{subtitle_font}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}{font_style}{border_str}{shadow_str}{box_str}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
+                    dt = f",drawtext=text='{text}':fontfile='{subtitle_font}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}{font_style}{outline_str}{shadow_str}{box_str}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
                     bg_filter += dt
             
             cmd = [
