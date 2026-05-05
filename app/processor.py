@@ -296,11 +296,10 @@ class VideoProcessor:
             str(output_path)
         ]
         
-        # Для размытого фона используем 2 входа
+        # Для размытого фона используем 1 вход с разделением
         if blurred_bg:
-            # [0:v] - фон (размытый 9:16)
-            # [1:v] - видео по центру
-            bg_filter = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25[bg];[1:v]scale=1080:-1[fg];[bg][fg]overlay=0:(H-h)/2"
+            # Один вход, разделяем на 2 потока: фон (размытый) и видео (чёткое)
+            bg_filter = "[0:v]split=2[bg_in][fg_in];[bg_in]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25[bg];[fg_in]scale=1080:-1[fg];[bg][fg]overlay=0:(H-h)/2"
             
             # Добавляем субтитры
             if subtitle_segments:
@@ -332,13 +331,12 @@ class VideoProcessor:
                 shadow_str = f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={self.color_to_hex(subtitle_shadowcolor)}" if subtitle_shadowx > 0 or subtitle_shadowy > 0 else ""
                 box_str = f":box=1:boxborderw={subtitle_boxborder}:boxcolor={self.color_to_hex(subtitle_boxcolor)}" if subtitle_boxborder > 0 else ""
                     
-                    dt = f",drawtext=text='{text}':fontfile='{subtitle_font}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}{font_style}{outline_str}{shadow_str}{box_str}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
-                    bg_filter += dt
+                dt = f",drawtext=text='{text}':fontfile='{subtitle_font}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}{font_style}{outline_str}{shadow_str}{box_str}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
+                bg_filter += dt
             
             cmd = [
                 r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
                 "-ss", str(segment["start"]),
-                "-i", video_path,
                 "-i", video_path,
                 "-t", str(segment["end"] - segment["start"]),
                 "-filter_complex", bg_filter,
@@ -347,7 +345,7 @@ class VideoProcessor:
                 "-crf", "23",
                 "-c:a", "aac",
                 "-b:a", "128k",
-                "-map", "1:a",
+                "-map", "0:a",
                 str(output_path)
             ]
         
