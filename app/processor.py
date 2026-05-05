@@ -198,7 +198,7 @@ class VideoProcessor:
         subtitle_capitalize = True
         subtitle_borderw = 6
         subtitle_bordercolor = "black"
-        subtitle_boxborder = 20
+        subtitle_boxborder = 0
         subtitle_boxcolor = "black@0.8"
         subtitle_shadowx = 3
         subtitle_shadowy = 3
@@ -323,20 +323,27 @@ class VideoProcessor:
                     elif subtitle_style == "bold_italic":
                         font_style = ":fontweight=bold:fontstyle=italic"
                     
-                # Border and shadow
-                border_str = f":borderw={subtitle_borderw}:bordercolor={self.color_to_hex(subtitle_bordercolor)}" if subtitle_borderw > 0 else ""
-                shadow_str = f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={self.color_to_hex(subtitle_shadowcolor)}" if subtitle_shadowx > 0 or subtitle_shadowy > 0 else ""
-                box_str = f":box=1:boxborderw={subtitle_boxborder}:boxcolor={self.color_to_hex(subtitle_boxcolor)}" if subtitle_boxborder > 0 else ""
+                    # Border and shadow
+                    border_str = f":borderw={subtitle_borderw}:bordercolor={self.color_to_hex(subtitle_bordercolor)}" if subtitle_borderw > 0 else ""
+                    shadow_str = f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={self.color_to_hex(subtitle_shadowcolor)}" if subtitle_shadowx > 0 or subtitle_shadowy > 0 else ""
+                    box_str = f":box=1:boxborderw={subtitle_boxborder}:boxcolor={self.color_to_hex(subtitle_boxcolor)}" if subtitle_boxborder > 0 else ""
                     
                     dt = f",drawtext=text='{text}':fontfile='{subtitle_font}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}{font_style}{border_str}{shadow_str}{box_str}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
-                bg_filter += dt
+                    bg_filter += dt
+            
+            # Write filter to file to avoid command line too long
+            filter_file_path = self.output_dir / f"filter_{job_id}_{index}.txt"
+            with open(filter_file_path, 'w', encoding='utf-8') as f:
+                f.write(bg_filter)
+            print(f"[VIDEO] Filter length: {len(bg_filter)} chars")
+            print(f"[FILTER] Filter written to file: {filter_file_path}")
             
             cmd = [
                 r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
                 "-ss", str(segment["start"]),
                 "-i", video_path,
                 "-t", str(segment["end"] - segment["start"]),
-                "-filter_complex", bg_filter,
+                "-filter_complex_script", str(filter_file_path),
                 "-c:v", "libx264",
                 "-preset", "fast",
                 "-crf", "23",
