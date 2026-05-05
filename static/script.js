@@ -775,6 +775,7 @@ async function startIntegration() {
         formData.append('videos_per_day', document.getElementById('videos-per-day').value);
         formData.append('short_length', document.getElementById('integration-short-length').value);
         formData.append('shorts_count', document.getElementById('integration-shorts-count').value);
+        formData.append('blurred_bg', String(document.getElementById('integration-blurred-bg').checked));
         
         // Музыка
         formData.append('enable_audio', document.getElementById('enable-audio').checked);
