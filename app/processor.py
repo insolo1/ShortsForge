@@ -249,7 +249,22 @@ class VideoProcessor:
                 end_time = seg['end']
                 fontcolor_hex = self.color_to_hex(subtitle_fontcolor)
                 enable_expr = f"between(t, {start_time:.3f}, {end_time:.3f})"
-                dt = f"drawtext=text='{text}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
+                
+                # Style
+                font_style = ""
+                if subtitle_style == "bold":
+                    font_style = ":fontweight=bold"
+                elif subtitle_style == "italic":
+                    font_style = ":fontstyle=italic"
+                elif subtitle_style == "bold_italic":
+                    font_style = ":fontweight=bold:fontstyle=italic"
+                
+                # Border and shadow
+                border_str = f":borderw={subtitle_borderw}:bordercolor={self.color_to_hex(subtitle_bordercolor)}" if subtitle_borderw > 0 else ""
+                shadow_str = f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={self.color_to_hex(subtitle_shadowcolor)}" if subtitle_shadowx > 0 or subtitle_shadowy > 0 else ""
+                box_str = f":box=1:boxborderw={subtitle_boxborder}:boxcolor={self.color_to_hex(subtitle_boxcolor)}" if subtitle_boxborder > 0 else ""
+                
+                dt = f"drawtext=text='{text}':fontfile='{subtitle_font}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}{font_style}{border_str}{shadow_str}{box_str}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
                 filters += "," + dt
         
         # Write filter to file to avoid WinError 206 (command line too long)
@@ -280,7 +295,7 @@ class VideoProcessor:
         if blurred_bg:
             # [0:v] - фон (размытый 9:16)
             # [1:v] - видео по центру
-            bg_filter = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25[bg];[1:v]scale=1080:-1[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[out]"
+            bg_filter = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25[bg];[1:v]scale=1080:-1[fg];[bg][fg]overlay=0:(H-h)/2"
             
             # Добавляем субтитры
             if subtitle_segments:
@@ -293,8 +308,23 @@ class VideoProcessor:
                     end_time = seg['end']
                     fontcolor_hex = self.color_to_hex(subtitle_fontcolor)
                     enable_expr = f"between(t, {start_time:.3f}, {end_time:.3f})"
-                    dt = f"drawtext=text='{text}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
-                    bg_filter += "," + dt
+                    
+                    # Style
+                    font_style = ""
+                    if subtitle_style == "bold":
+                        font_style = ":fontweight=bold"
+                    elif subtitle_style == "italic":
+                        font_style = ":fontstyle=italic"
+                    elif subtitle_style == "bold_italic":
+                        font_style = ":fontweight=bold:fontstyle=italic"
+                    
+                    # Border and shadow
+                    border_str = f":borderw={subtitle_borderw}:bordercolor={self.color_to_hex(subtitle_bordercolor)}" if subtitle_borderw > 0 else ""
+                    shadow_str = f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={self.color_to_hex(subtitle_shadowcolor)}" if subtitle_shadowx > 0 or subtitle_shadowy > 0 else ""
+                    box_str = f":box=1:boxborderw={subtitle_boxborder}:boxcolor={self.color_to_hex(subtitle_boxcolor)}" if subtitle_boxborder > 0 else ""
+                    
+                    dt = f",drawtext=text='{text}':fontfile='{subtitle_font}':fontsize={subtitle_fontsize}:fontcolor={fontcolor_hex}{font_style}{border_str}{shadow_str}{box_str}:x=(w-text_w)/2:y={1920-subtitle_position}:enable='{enable_expr}'"
+                    bg_filter += dt
             
             cmd = [
                 r"C:\ffmpeg\ffmpeg1\bin\ffmpeg.exe", "-y",
