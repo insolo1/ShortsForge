@@ -656,7 +656,8 @@ async def start_integration(
         job_id, source, video_url, video_file_path, account_list,
         distribution_mode, custom_distribution, videos_per_day,
         publish_time, short_length, shorts_count,
-        enable_scheduled, schedule_start_date, schedule_start_time, schedule_interval
+        enable_scheduled, schedule_start_date, schedule_start_time, schedule_interval,
+        blurred_bg
     ))
     
     return {"job_id": job_id, "status": "started"}
@@ -667,7 +668,8 @@ async def process_integration(
     accounts: list, distribution_mode: str, custom_distribution: str,
     videos_per_day: int, publish_time: str, short_length: int, shorts_count: int,
     enable_scheduled: bool = False, schedule_start_date: str = None, 
-    schedule_start_time: str = None, schedule_interval: int = 60
+    schedule_start_time: str = None, schedule_interval: int = 60,
+    blurred_bg: bool = False
 ):
     try:
         print(f"[INTEGRATION] Starting job: {job_id}")
