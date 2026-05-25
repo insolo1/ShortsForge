@@ -8,11 +8,20 @@ load_dotenv()
 
 class AIService:
     def __init__(self):
+        self._client = None
+        self._api_key = None
+    
+    @property
+    def client(self):
+        load_dotenv(override=True)
         api_key = os.getenv("GROQ_API_KEY", "")
-        if api_key:
-            self.client = Groq(api_key=api_key)
-        else:
-            self.client = None
+        if api_key and api_key != self._api_key:
+            self._client = Groq(api_key=api_key)
+            self._api_key = api_key
+        elif not api_key:
+            self._client = None
+            self._api_key = None
+        return self._client
     
     async def generate_metadata(self, transcript: str, short_num: int, video_info: dict = None) -> dict:
         if not self.client:

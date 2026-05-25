@@ -9,11 +9,18 @@
     <style>
         body { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
         .card { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); }
+        @media (max-width: 640px) {
+            .admin-header { flex-direction: column; gap: 0.5rem; align-items: flex-start; }
+            .admin-header > div:last-child { width: 100; }
+            .video-card { flex-direction: column !important; }
+            .video-card img { width: 100% !important; height: auto !important; }
+            .video-stats { flex-wrap: wrap; gap: 0.5rem !important; }
+        }
     </style>
 </head>
 <body class="min-h-screen text-white">
     <div class="container mx-auto px-4 py-8 max-w-7xl">
-        <header class="mb-8 flex justify-between items-center">
+        <header class="mb-8 flex flex-wrap justify-between items-center admin-header">
             <div>
                 <h1 class="text-3xl font-bold bg-gradient-to-r from-pink-500 to-purple-500 bg-clip-text text-transparent">
                     Админ-панель
@@ -213,12 +220,12 @@
         function updateVideosList(videos) {
             const list = document.getElementById('videos-list');
             list.innerHTML = videos.map(video => `
-                <div class="card rounded-xl p-4 flex gap-4">
-                    <img src="${video.thumbnail}" class="w-32 h-20 rounded object-cover" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22120%22 height=%2280%22%3E%3Crect fill=%22%23374151%22 width=%22120%22 height=%2280%22/%3E%3C/svg%3E'">
-                    <div class="flex-1">
-                        <h4 class="font-semibold mb-1">${video.title}</h4>
+                <div class="card rounded-xl p-4 flex gap-4 video-card">
+                    <img src="${video.thumbnail}" class="w-32 h-20 rounded object-cover flex-shrink-0" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22120%22 height=%2280%22%3E%3Crect fill=%22%23374151%22 width=%22120%22 height=%2280%22/%3E%3C/svg%3E'">
+                    <div class="flex-1 min-w-0">
+                        <h4 class="font-semibold mb-1 truncate">${video.title}</h4>
                         <p class="text-sm text-gray-400 mb-2">${video.account}</p>
-                        <div class="flex gap-4 text-sm">
+                        <div class="flex flex-wrap gap-2 sm:gap-4 text-sm video-stats">
                             <span>👁 ${formatNumber(video.views)} просмотров</span>
                             <span>👍 ${formatNumber(video.likes)} лайков</span>
                             <span>💬 ${formatNumber(video.comments)} комментариев</span>

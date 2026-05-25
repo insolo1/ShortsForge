@@ -3,7 +3,9 @@
 let currentTab = 'url';
 let currentJobId = null;
 let pollInterval = null;
+let lastShownLog = '';
 let logsPollingInterval = null;
+let currentShorts = [];
 
 // Этапы обработки
 const stages = [
@@ -19,72 +21,43 @@ const stages = [
 function updateStages(currentStatus) {
     const stagesList = document.getElementById('stages-list');
     if (!stagesList) return;
-    
-    // Определяем текущий этап по статусу
+
     let currentStageId = 'init';
     switch(currentStatus) {
-        case 'downloading':
-            currentStageId = 'download';
-            break;
-        case 'processing':
-            currentStageId = 'split';
-            break;
-        case 'generating':
-            currentStageId = 'content';
-            break;
-        case 'uploading':
-            currentStageId = 'youtube';
-            break;
-        case 'completed':
-            currentStageId = 'done';
-            break;
-        default:
-            currentStageId = 'init';
+        case 'downloading': currentStageId = 'download'; break;
+        case 'processing': currentStageId = 'split'; break;
+        case 'generating': currentStageId = 'content'; break;
+        case 'uploading': currentStageId = 'youtube'; break;
+        case 'completed': currentStageId = 'done'; break;
     }
-    
-    // Обновляем статус каждого этапа
-    stages.forEach(stage => {
-        if (stage.id === currentStageId) {
-            stage.status = 'in_progress';
-        } else if (stages.findIndex(s => s.id === currentStageId) > stages.findIndex(s => s.id === stage.id)) {
-            stage.status = 'completed';
-        } else {
-            stage.status = 'waiting';
-        }
-    });
-    
-    // Рендерим список этапов
-    stagesList.innerHTML = stages.map(stage => {
-        let icon = '⏳';
-        let color = 'text-gray-500';
-        if (stage.status === 'completed') {
-            icon = '✅';
-            color = 'text-green-400';
-        } else if (stage.status === 'in_progress') {
-            icon = '🔄';
-            color = 'text-blue-400';
-        }
-        return `
-            <div class="flex items-center gap-3 ${color}">
-                <span class="text-lg">${icon}</span>
-                <span>${stage.name}</span>
-            </div>
-        `;
-    }).join('');
-    
-    // Выводим в чат
+
+    const stageIds = ['init', 'download', 'split', 'content', 'youtube', 'done'];
+    const currentIdx = stageIds.indexOf(currentStageId);
+
     const stageNames = {
         'init': 'Инициализация',
         'download': 'Скачивание видео',
         'split': 'Нарезка на шортсы',
-        'content': 'Генерация контента (названия, теги)',
+        'content': 'Генерация контента',
         'youtube': 'Загрузка на YouTube',
         'done': 'Завершено'
     };
-    
-    if (currentStatus && currentStatus !== 'unknown') {
-        addLog(`Текущий этап: ${stageNames[currentStageId] || currentStageId}`, 'progress');
-    }
+
+    stagesList.innerHTML = stageIds.map(id => {
+        const idx = stageIds.indexOf(id);
+        let icon = '⏳';
+        let colorClass = 'text-gray-500';
+        if (idx < currentIdx) {
+            icon = '✅';
+            colorClass = 'text-green-500';
+        } else if (idx === currentIdx) {
+            icon = '🔄';
+            colorClass = 'text-blue-400';
+        }
+        return `<div class="flex items-center gap-3" style="color:${idx < currentIdx ? '#22c55e' : idx === currentIdx ? '#60a5fa' : '#6b7280'}"><span style="font-size:1.25rem">${icon}</span><span style="font-size:0.875rem">${stageNames[id]}</span></div>`;
+    }).join('');
+
+    document.getElementById('progress-text').textContent = stageNames[currentStageId] || 'Обработка...';
 }
 
 // Переключение вкладок
@@ -129,13 +102,13 @@ document.addEventListener('DOMContentLoaded', function() {
     safeAddListener('tab-integration', 'click', () => switchTab('integration'));
     safeAddListener('create-btn', 'click', createShorts);
     safeAddListener('create-btn-file', 'click', createShortsFromFile);
+    safeAddListener('download-all-zip-btn', 'click', downloadAllAsZip);
     safeAddListener('save-settings-btn', 'click', saveSettings);
     safeAddListener('start-integration-btn', 'click', startIntegration);
     safeAddListener('upload-credentials-btn', 'click', uploadCredentials);
     safeAddListener('authorize-accounts-btn', 'click', authorizeAccounts);
     safeAddListener('save-preset-btn', 'click', savePreset);
     safeAddListener('load-preset', 'change', loadPresetFromSelect);
-    safeAddListener('clear-logs-btn', 'click', clearLogs);
     safeAddListener('refresh-accounts-btn', 'click', loadAccountsList);
 
     safeAddListener('video-file', 'change', (e) => {
@@ -185,6 +158,18 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAccountsList();
     loadSettings();
     
+    // Обработчики для сохранения в папку
+    ['url', 'file', 'integration'].forEach(tab => {
+        const cb = document.getElementById('save-video-' + tab);
+        if (cb) {
+            cb.addEventListener('change', () => {
+                document.getElementById('save-folder-row-' + tab)?.classList.toggle('hidden', !cb.checked);
+            });
+        }
+    });
+    
+    loadSaveFolders();
+    
     console.log('Инициализация завершена');
 });
 
@@ -211,6 +196,15 @@ async function loadSettings() {
                 document.getElementById('subtitle-shadowy').value = s.shadowy || 3;
                 document.getElementById('subtitle-shadowcolor').value = s.shadowcolor || 'black';
                 document.getElementById('subtitle-capitalize').checked = s.capitalize !== false;
+
+                if (document.getElementById('subtitle-words-count')) {
+                    document.getElementById('subtitle-words-count').value = s.words_count || 5;
+                    document.getElementById('subtitle-word-fade').checked = s.word_fade !== false;
+                }
+
+                if (document.getElementById('api-provider') && s.api_provider) {
+                    document.getElementById('api-provider').value = s.api_provider;
+                }
             }
         }
     } catch (e) {
@@ -243,6 +237,19 @@ async function saveSettings() {
         formData.append('capitalize', document.getElementById('subtitle-capitalize').checked);
         formData.append('crop_mode', '9:16');
         formData.append('zoom_enabled', false);
+
+        const apiKeyVal = document.getElementById('api-key-input')?.value?.trim();
+        const apiProvider = document.getElementById('api-provider')?.value;
+        if (apiKeyVal && apiProvider) {
+            formData.append('api_provider', apiProvider);
+            formData.append('api_key', apiKeyVal);
+        }
+
+        const wordsCountVal = document.getElementById('subtitle-words-count')?.value;
+        const wordFadeVal = document.getElementById('subtitle-word-fade')?.checked;
+        const wordsCountBackend = wordsCountVal === 'all' ? '999' : (wordsCountVal || '5');
+        formData.append('words_count', wordsCountBackend);
+        formData.append('word_fade', wordFadeVal ? 'true' : 'false');
         
         const response = await fetch('/api/settings', {
             method: 'POST',
@@ -296,18 +303,42 @@ function clearLogs() {
     document.getElementById('logs-content').innerHTML = '<div class="text-gray-500">Логи очищены</div>';
 }
 
+function updateLastLog(message, type = 'info') {
+    const logsContent = document.getElementById('logs-content');
+    const last = logsContent.lastElementChild;
+    if (!last || last.classList.contains('text-gray-500')) {
+        addLog(message, type);
+        return;
+    }
+    let color = 'text-green-400';
+    let icon = '●';
+    if (type === 'progress') { color = 'text-blue-400'; icon = '⟳'; }
+    else if (type === 'error') { color = 'text-red-400'; icon = '✗'; }
+    else if (type === 'success') { color = 'text-green-400'; icon = '✓'; }
+    else if (type === 'warning') { color = 'text-yellow-400'; icon = '⚠'; }
+    const timestamp = new Date().toLocaleTimeString('ru-RU');
+    last.className = `${color} mb-1`;
+    last.innerHTML = `<span class="text-gray-500">[${timestamp}]</span> ${icon} ${message}`;
+    logsContent.scrollTop = logsContent.scrollHeight;
+}
+
 function startLogsPolling(jobId) {
+    if (logsPollingInterval) clearInterval(logsPollingInterval);
     currentJobId = jobId;
+    let shownLogs = 0;
     
     logsPollingInterval = setInterval(async () => {
         try {
             const response = await fetch(`/api/logs/${jobId}`);
             const data = await response.json();
+            const logs = data.logs || [];
+            const total = logs.length;
             
-            if (data.logs && data.logs.length > 0) {
-                data.logs.forEach(log => {
-                    addLog(log.message, log.type);
-                });
+            if (total > shownLogs) {
+                for (let i = shownLogs; i < total; i++) {
+                    addLog(logs[i].message, logs[i].type || 'info');
+                }
+                shownLogs = total;
             }
             
             // Обновляем этапы интеграции
@@ -567,10 +598,13 @@ async function createShorts() {
         
         const smartSelection = String(document.getElementById('smart-selection-url').checked);
         const blurredBg = String(document.getElementById('blurred-bg-url').checked);
+        const saveVideo = String(document.getElementById('save-video-url').checked);
+        const saveFolder = getSelectedSaveFolder('url');
+        const filenameKeywords = document.getElementById('filename-keywords')?.value?.trim() || '';
         const response = await fetch('/api/upload-url', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: `url=${encodeURIComponent(url)}&short_length=${shortLength}&shorts_count=${shortsCount}&smart_selection=${smartSelection}&blurred_bg=${blurredBg}`
+            body: `url=${encodeURIComponent(url)}&short_length=${shortLength}&shorts_count=${shortsCount}&smart_selection=${smartSelection}&blurred_bg=${blurredBg}&save_video=${saveVideo}&save_folder=${encodeURIComponent(saveFolder)}&filename_keywords=${encodeURIComponent(filenameKeywords)}`
         });
         
         if (!response.ok) {
@@ -607,37 +641,71 @@ async function createShortsFromFile() {
             return alert('Выберите файл');
         }
         
+        const file = fileInput.files[0];
+        const fileSizeMB = (file.size / 1024 / 1024).toFixed(1);
+        
         const formData = new FormData();
-        formData.append('file', fileInput.files[0]);
+        formData.append('file', file);
         formData.append('short_length', shortLength);
         formData.append('shorts_count', shortsCount);
         formData.append('smart_selection', String(document.getElementById('smart-selection-file').checked));
         formData.append('blurred_bg', String(document.getElementById('blurred-bg-file').checked));
-        
-        btn.textContent = 'Загружаем файл...';
-        const response = await fetch('/api/upload-file', {
-            method: 'POST',
-            body: formData
-        });
-        
-        if (!response.ok) {
-            throw new Error('Ошибка сервера: ' + response.status);
-        }
-        
-        const data = await response.json();
-        currentJobId = data.job_id;
+        formData.append('save_video', String(document.getElementById('save-video-file').checked));
+        formData.append('save_folder', getSelectedSaveFolder('file'));
+        formData.append('filename_keywords', document.getElementById('filename-keywords')?.value?.trim() || '');
         
         document.getElementById('progress-section').classList.remove('hidden');
-        btn.textContent = 'Обрабатываем...';
-        startPolling();
+        clearLogs();
+        addLog(`Файл: ${file.name} (${fileSizeMB} МБ)`, 'info');
+        
+        const xhr = new XMLHttpRequest();
+        
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 100);
+                const loadedMB = (e.loaded / 1024 / 1024).toFixed(1);
+                const totalMB = (e.total / 1024 / 1024).toFixed(1);
+                btn.textContent = `${pct}% загружено`;
+                document.getElementById('progress-bar').style.width = pct + '%';
+                document.getElementById('progress-text').textContent = `Загрузка: ${loadedMB}/${totalMB} МБ (${pct}%)`;
+                updateLastLog(`Загрузка: ${loadedMB}/${totalMB} МБ (${pct}%)`, 'progress');
+            }
+        });
+        
+        xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                const data = JSON.parse(xhr.responseText);
+                currentJobId = data.job_id;
+                addLog('Файл загружен! Обработка...', 'success');
+                btn.textContent = 'Обрабатываем...';
+                startPolling();
+            } else {
+                addLog('Ошибка сервера: ' + xhr.status, 'error');
+                btn.disabled = false;
+                btn.textContent = 'Создать Shorts';
+            }
+        });
+        
+        xhr.addEventListener('error', () => {
+            addLog('Ошибка сети при загрузке', 'error');
+            btn.disabled = false;
+            btn.textContent = 'Создать Shorts';
+        });
+        
+        xhr.open('POST', '/api/upload-file');
+        xhr.send(formData);
     } catch (e) {
-        alert('Ошибка: ' + e.message);
+        addLog('Ошибка: ' + e.message, 'error');
         btn.disabled = false;
         btn.textContent = 'Создать Shorts';
     }
 }
 
 function startPolling() {
+    if (pollInterval) clearInterval(pollInterval);
+    let shownLogs = 0;
+    let staleCount = 0;
+    
     pollInterval = setInterval(async () => {
         const res = await fetch(`/api/status/${currentJobId}`);
         const data = await res.json();
@@ -645,20 +713,41 @@ function startPolling() {
         document.getElementById('progress-bar').style.width = data.progress + '%';
         document.getElementById('progress-text').textContent = getStatusText(data.status);
         
-        // Обновляем интерактивное окно этапов
         updateStages(data.status);
         
         if (data.status === 'completed') {
             clearInterval(pollInterval);
             document.getElementById('create-btn').disabled = false;
-            document.getElementById('create-btn').textContent = 'Sozdat Shorts';
+            document.getElementById('create-btn').textContent = 'Создать Shorts';
             showResults(data.shorts);
+            addLog('Готово!', 'success');
         } else if (data.status === 'failed') {
             clearInterval(pollInterval);
             document.getElementById('create-btn').disabled = false;
-            document.getElementById('create-btn').textContent = 'Sozdat Shorts';
-            alert('Oshibka: ' + data.error);
+            document.getElementById('create-btn').textContent = 'Создать Shorts';
+            addLog('Ошибка: ' + data.error, 'error');
         }
+        
+        try {
+            const logsRes = await fetch(`/api/logs/${currentJobId}`);
+            const logsData = await logsRes.json();
+            const logs = logsData.logs || [];
+            const total = logs.length;
+            
+            if (total > shownLogs) {
+                for (let i = shownLogs; i < total; i++) {
+                    addLog(logs[i].message, logs[i].type || 'info');
+                }
+                shownLogs = total;
+                staleCount = 0;
+            } else {
+                staleCount++;
+                if (staleCount > 30 && data.status === 'processing') {
+                    shownLogs = 0;
+                    staleCount = 0;
+                }
+            }
+        } catch(e) {}
     }, 2000);
 }
 
@@ -673,8 +762,15 @@ function getStatusText(status) {
 }
 
 function showResults(shorts) {
+    currentShorts = shorts;
     document.getElementById('progress-section').classList.add('hidden');
     document.getElementById('results-section').classList.remove('hidden');
+    
+    const downloadBtn = document.getElementById('download-all-zip-btn');
+    if (shorts.length > 0) {
+        downloadBtn.classList.remove('hidden');
+        downloadBtn.textContent = '📦 Скачать все (' + shorts.length + ') в ZIP';
+    }
     
     const container = document.getElementById('shorts-list');
     container.innerHTML = shorts.map(short => `
@@ -717,6 +813,22 @@ async function saveChanges(shortId) {
     });
     
     alert('Сохранено!');
+}
+
+async function downloadAllAsZip() {
+    if (!currentJobId) return alert('Нет видео для скачивания');
+    
+    const btn = document.getElementById('download-all-zip-btn');
+    btn.textContent = 'Создаём ZIP...';
+    btn.disabled = true;
+    
+    const a = document.createElement('a');
+    a.href = `/api/download-zip/${currentJobId}`;
+    a.download = `shorts_${currentJobId}.zip`;
+    a.click();
+    
+    btn.textContent = '📦 Скачать все в ZIP';
+    btn.disabled = false;
 }
 
 // Запуск интеграции
@@ -776,6 +888,8 @@ async function startIntegration() {
         formData.append('short_length', document.getElementById('integration-short-length').value);
         formData.append('shorts_count', document.getElementById('integration-shorts-count').value);
         formData.append('blurred_bg', String(document.getElementById('integration-blurred-bg').checked));
+        formData.append('save_video', String(document.getElementById('save-video-integration').checked));
+        formData.append('save_folder', getSelectedSaveFolder('integration'));
         
         // Музыка
         formData.append('enable_audio', document.getElementById('enable-audio').checked);
@@ -812,7 +926,6 @@ async function startIntegration() {
         const data = await response.json();
         
         // Показываем окно логов
-        document.getElementById('logs-window').classList.remove('hidden');
         clearLogs();
         addLog(`Интеграция запущена! Job ID: ${data.job_id}`, 'success');
         
@@ -1005,5 +1118,305 @@ async function loadPresetFromSelect(e) {
         }
     } catch (e) {
         alert('Ошибка загрузки схемы: ' + e.message);
+    }
+}
+
+// ==================== Предпросмотр субтитров ====================
+
+function updateSubtitlePreview() {
+    const text = document.getElementById('preview-text')?.value || 'Текст субтитров';
+    const font = document.getElementById('subtitle-font')?.value || 'Arial';
+    const style = document.getElementById('subtitle-style')?.value || 'normal';
+    const fontsize = parseInt(document.getElementById('subtitle-fontsize')?.value || '75');
+    const color = document.getElementById('subtitle-color')?.value || 'white';
+    const position = parseInt(document.getElementById('subtitle-position')?.value || '600');
+    const borderw = parseInt(document.getElementById('subtitle-borderw')?.value || '0');
+    const bordercolor = document.getElementById('subtitle-bordercolor')?.value || 'black';
+    const boxborder = parseInt(document.getElementById('subtitle-boxborder')?.value || '0');
+    const boxcolor = document.getElementById('subtitle-boxcolor')?.value || 'none';
+    const shadowx = parseInt(document.getElementById('subtitle-shadowx')?.value || '0');
+    const shadowy = parseInt(document.getElementById('subtitle-shadowy')?.value || '0');
+    const shadowcolor = document.getElementById('subtitle-shadowcolor')?.value || 'none';
+    const capitalize = document.getElementById('subtitle-capitalize')?.checked || false;
+    const previewBg = document.getElementById('preview-bg-color')?.value || 'black';
+
+    const colors = {
+        white: '#FFFFFF', yellow: '#FFFF00', red: '#FF0000', green: '#00FF00',
+        blue: '#0000FF', cyan: '#00FFFF', magenta: '#FF00FF', orange: '#FFA500',
+        black: '#000000', gray: '#808080'
+    };
+
+    let finalText = text;
+    if (capitalize) finalText = text.toUpperCase();
+
+    const span = document.getElementById('preview-text-span');
+    if (!span) return;
+
+    span.textContent = finalText;
+    span.style.fontFamily = font + ', sans-serif';
+    span.style.fontSize = Math.round(fontsize * 180 / 1080) + 'px';
+    span.style.color = colors[color] || color;
+    span.style.fontWeight = (style === 'bold' || style === 'bold_italic') ? 'bold' : 'normal';
+    span.style.fontStyle = (style === 'italic' || style === 'bold_italic') ? 'italic' : 'normal';
+
+    span.style.textShadow = 'none';
+    span.style.webkitTextStroke = 'none';
+    span.style.backgroundColor = 'transparent';
+    span.style.padding = '0';
+    span.style.borderRadius = '0';
+    span.style.display = 'inline-block';
+    span.style.maxWidth = '90%';
+
+    if (borderw > 0 && bordercolor !== 'none') {
+        span.style.webkitTextStroke = Math.round(borderw * 180 / 1080) + 'px ' + (colors[bordercolor] || bordercolor);
+    }
+
+    if ((shadowx > 0 || shadowy > 0) && shadowcolor !== 'none') {
+        span.style.textShadow = Math.round(shadowx * 180 / 1080) + 'px ' + Math.round(shadowy * 180 / 1080) + 'px 2px ' + (colors[shadowcolor] || shadowcolor);
+    }
+
+    if (boxborder > 0 && boxcolor !== 'none') {
+        if (boxcolor.includes('@')) {
+            const parts = boxcolor.split('@');
+            const alpha = parseFloat(parts[1]);
+            span.style.backgroundColor = 'rgba(0, 0, 0, ' + alpha + ')';
+        } else {
+            span.style.backgroundColor = colors[boxcolor] || boxcolor;
+        }
+        span.style.padding = Math.round(boxborder * 180 / 1080) + 'px';
+        span.style.borderRadius = '4px';
+    }
+
+    const layer = document.getElementById('preview-subtitle-layer');
+    if (layer) {
+        const scaledY = Math.round(position * 320 / 1920);
+        layer.style.top = scaledY + 'px';
+        layer.style.bottom = 'auto';
+    }
+
+    const preview = document.getElementById('subtitle-preview');
+    if (preview) {
+        preview.style.backgroundColor = previewBg;
+    }
+}
+
+function initSubtitlePreview() {
+    const ids = ['subtitle-font', 'subtitle-style', 'subtitle-fontsize', 'subtitle-color',
+                 'subtitle-position', 'subtitle-borderw', 'subtitle-bordercolor', 'subtitle-boxborder', 'subtitle-boxcolor',
+                 'subtitle-shadowx', 'subtitle-shadowy', 'subtitle-shadowcolor',
+                 'preview-text', 'preview-bg-color'];
+    
+    ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('input', updateSubtitlePreview);
+            el.addEventListener('change', updateSubtitlePreview);
+        }
+    });
+
+    const capEl = document.getElementById('subtitle-capitalize');
+    if (capEl) capEl.addEventListener('change', updateSubtitlePreview);
+
+    updateSubtitlePreview();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    initSubtitlePreview();
+    
+    const saveVideoUrl = document.getElementById('save-video-url');
+    if (saveVideoUrl) {
+        saveVideoUrl.addEventListener('change', () => {
+            document.getElementById('save-folder-row-url')?.classList.toggle('hidden', !saveVideoUrl.checked);
+        });
+    }
+    
+    const saveVideoFile = document.getElementById('save-video-file');
+    if (saveVideoFile) {
+        saveVideoFile.addEventListener('change', () => {
+            document.getElementById('save-folder-row-file')?.classList.toggle('hidden', !saveVideoFile.checked);
+        });
+    }
+    
+    const saveVideoInt = document.getElementById('save-video-integration');
+    if (saveVideoInt) {
+        saveVideoInt.addEventListener('change', () => {
+            document.getElementById('save-folder-row-integration')?.classList.toggle('hidden', !saveVideoInt.checked);
+        });
+    }
+    
+    loadSaveFolders();
+});
+
+async function loadSaveFolders() {
+    try {
+        const res = await fetch('/api/saved-folders');
+        const data = await res.json();
+        if (data.status === 'success') {
+            ['save-folder-select-url', 'save-folder-select-file', 'save-folder-select-integration'].forEach(id => {
+                const sel = document.getElementById(id);
+                if (!sel) return;
+                const current = sel.value;
+                sel.innerHTML = '<option value="">-- Выбрать папку --</option>';
+                data.folders.forEach(f => {
+                    const opt = document.createElement('option');
+                    opt.value = f;
+                    opt.textContent = f;
+                    if (f === current) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+            });
+        }
+    } catch (e) {
+        console.log('Failed to load save folders:', e);
+    }
+}
+
+async function createSaveFolder(tab) {
+    const input = document.getElementById('save-folder-' + tab);
+    const name = input?.value?.trim();
+    if (!name) return;
+    
+    try {
+        const res = await fetch('/api/saved-folders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder: name })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+            input.value = '';
+            await loadSaveFolders();
+            const selectId = 'save-folder-select-' + tab;
+            const sel = document.getElementById(selectId);
+            if (sel) sel.value = name;
+        } else {
+            alert('Ошибка: ' + data.message);
+        }
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
+function getSelectedSaveFolder(tab) {
+    const sel = document.getElementById('save-folder-select-' + tab)?.value;
+    const input = document.getElementById('save-folder-' + tab)?.value?.trim();
+    return sel || input || 'saved';
+}
+
+async function deleteSaveFolder(tab) {
+    const sel = document.getElementById('save-folder-select-' + tab);
+    const name = sel?.value;
+    if (!name) return alert('Выберите папку для удаления');
+    if (!confirm('Удалить папку "' + name + '" и все файлы в ней?')) return;
+    
+    try {
+        const res = await fetch('/api/saved-folders', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder: name })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+            await loadSaveFolders();
+        } else {
+            alert('Ошибка: ' + data.message);
+        }
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
+async function loadProjects() {
+    try {
+        const res = await fetch('/api/projects');
+        const data = await res.json();
+        const container = document.getElementById('projects-list');
+        if (!container) return;
+        
+        if (!data.projects || data.projects.length === 0) {
+            container.innerHTML = '<p class="text-gray-500">Нет проектов</p>';
+            return;
+        }
+        
+        container.innerHTML = data.projects.map(p => {
+            const date = new Date(p.created_at * 1000).toLocaleString('ru-RU');
+            const statusColors = { 'completed': 'text-green-400', 'failed': 'text-red-400', 'processing': 'text-blue-400', 'downloading': 'text-yellow-400' };
+            const statusIcons = { 'completed': '✅', 'failed': '❌', 'processing': '🔄', 'downloading': '⏳' };
+            const sc = statusColors[p.status] || 'text-gray-400';
+            const si = statusIcons[p.status] || '❓';
+            return `
+            <div class="p-4 bg-gray-800 rounded-xl border border-gray-700">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="font-medium">${si} ${p.job_id.substring(0, 8)}...</div>
+                        <div class="text-sm text-gray-500">${date}</div>
+                        <div class="text-sm ${sc}">${p.status} — ${p.shorts_count} шортсов</div>
+                        ${p.save_folder ? `<div class="text-xs text-gray-600">Папка: ${p.save_folder}</div>` : ''}
+                    </div>
+                    <button onclick="deleteProject('${p.job_id}')" class="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-xs">🗑</button>
+                </div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        console.error('Failed to load projects:', e);
+    }
+}
+
+async function deleteProject(jobId) {
+    if (!confirm('Удалить проект и все его файлы?')) return;
+    try {
+        const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.status === 'success') {
+            loadProjects();
+        }
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
+async function cleanupOldProjects() {
+    console.log('cleanupOldProjects called');
+    if (!confirm('Удалить все завершённые/проваленные проекты старше 7 дней?')) return;
+    try {
+        const res = await fetch('/api/jobs?days_old=7', { method: 'DELETE' });
+        const data = await res.json();
+        console.log('cleanupOldProjects response:', data);
+        if (data.status === 'success') {
+            alert(`Очищено ${data.deleted} проектов`);
+            loadProjects();
+        }
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
+async function cleanupUploads() {
+    console.log('cleanupUploads called');
+    if (!confirm('Удалить все входные файлы из uploads? Это большие видео!')) return;
+    try {
+        const res = await fetch('/api/cleanup/uploads', { method: 'DELETE' });
+        const data = await res.json();
+        console.log('cleanupUploads response:', data);
+        if (data.status === 'success') {
+            alert(`Удалено ${data.deleted} файлов из uploads`);
+        }
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
+async function cleanupOutput() {
+    console.log('cleanupOutput called');
+    if (!confirm('Удалить все шортсы из output?')) return;
+    try {
+        const res = await fetch('/api/cleanup/output', { method: 'DELETE' });
+        const data = await res.json();
+        console.log('cleanupOutput response:', data);
+        if (data.status === 'success') {
+            alert(`Удалено ${data.deleted} файлов из output`);
+        }
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
     }
 }
