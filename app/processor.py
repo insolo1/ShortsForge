@@ -15,6 +15,7 @@ class VideoProcessor:
         self.output_dir.mkdir(exist_ok=True)
         self.ffmpeg = os.getenv("FFMPEG_PATH", "ffmpeg")
         self.gpu_encoder = self._detect_gpu_encoder()
+        self.fonts_dir = Path(__file__).parent.parent / "fonts"
     
     def _detect_gpu_encoder(self):
         """Автоопределение GPU кодека для ffmpeg"""
@@ -31,12 +32,35 @@ class VideoProcessor:
             elif "h264_qsv" in encoders:
                 print("[FFMPEG] Intel QSV detected")
                 return "h264_qsv"
+            elif "h264_v4l2m2m" in encoders:
+                print("[FFMPEG] Raspberry Pi V4L2 M2M detected")
+                return "h264_v4l2m2m"
         except Exception as e:
             print(f"[FFMPEG] GPU detection error: {e}")
         
         print("[FFMPEG] No GPU encoder, using CPU (libx264)")
         return None
     
+    async def download_video(self, url: str, job_id: str = "") -> str:
+        import uuid
+        output_path = self.upload_dir / f"{job_id or uuid.uuid4().hex}_downloaded.mp4"
+
+        cmd = ["yt-dlp", "-f", "best", "-o", str(output_path), url]
+        print(f"[DOWNLOAD] {url} -> {output_path}")
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=600))
+
+        if result.returncode != 0:
+            error = result.stderr.decode('utf-8', errors='ignore') if result.stderr else ''
+            raise Exception(f"Download failed: {error[:300]}")
+
+        if not output_path.exists():
+            raise Exception(f"Downloaded file not found: {output_path}")
+
+        print(f"[DOWNLOAD] OK: {output_path}")
+        return str(output_path)
+
     @staticmethod
     def _filter_nondialogue(segments):
         """Удаляет сегменты с описаниями звуков/музыки (не речь персонажей)"""
@@ -58,7 +82,7 @@ class VideoProcessor:
         return filtered
 
     @classmethod
-    def _get_whisper_model(cls, model_size="small"):
+    def _get_whisper_model(cls, model_size="base"):
         """Singleton Whisper model - загружается один раз"""
         if cls._whisper_model is None or cls._whisper_model_size != model_size:
             print(f"[WHISPER] Loading model '{model_size}' (singleton)...")
@@ -331,7 +355,7 @@ class VideoProcessor:
             segments.append({"start": start, "end": end})
         return segments
     
-    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "") -> str:
+    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False) -> str:
         kw_part = f"_{filename_keywords}" if filename_keywords else ""
         output_path = self.output_dir / f"short_{job_id}_{index}{kw_part}.mp4"
 
@@ -432,102 +456,97 @@ class VideoProcessor:
                         text = text.capitalize()
                     f.write(f'Dialogue: 0,{fmt_ass(start_t)},{fmt_ass(end_t)},Default,,0,0,0,,{text}\n')
 
-        temp_video = self.output_dir / f"temp_{job_id}_{index}.mp4"
-
-        if blurred_bg:
-            filter_chain = "[0:v]split=2[bg_in][fg_in];[bg_in]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25[bg];[fg_in]scale=1080:-1[fg];[bg][fg]overlay=0:(H-h)/2"
+        if crop_fill:
+            if blurred_bg:
+                print(f"[FFMPEG] [{index}] crop_fill + blurred_bg both enabled, using crop_fill (square fg + blurred bg)")
+            filter_chain = "[0:v]split=2[bg_in][fg_in];[bg_in]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg];[fg_in]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg];[bg][fg]overlay=0:(H-h)/2"
+        elif blurred_bg:
+            filter_chain = "[0:v]split=2[bg_in][fg_in];[bg_in]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg];[fg_in]scale=1080:-1[fg];[bg][fg]overlay=0:(H-h)/2"
         else:
             filter_chain = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
         
+        print(f"[FFMPEG] [{index}] crop_fill={crop_fill}, blurred_bg={blurred_bg}, filter={filter_chain[:60]}...")
+
         # GPU или CPU
-        if self.gpu_encoder:
+        if self.gpu_encoder == "h264_nvenc":
+            video_codec = "h264_nvenc"
+            video_preset = "p4"
+            video_quality = ["-cq", "18", "-b:v", "20M", "-rc", "vbr"]
+        elif self.gpu_encoder == "h264_v4l2m2m":
+            video_codec = "h264_v4l2m2m"
+            video_preset = ""
+            video_quality = ["-b:v", "5M", "-g", "30"]
+        elif self.gpu_encoder:
             video_codec = self.gpu_encoder
             video_preset = "fast"
-            video_quality = ["-cq", "28"]
+            video_quality = ["-cq", "18"]
         else:
             video_codec = "libx264"
             video_preset = "ultrafast"
-            video_quality = ["-crf", "28"]
+            video_quality = ["-crf", "18", "-threads", "0"]
         
-        cmd1 = [
+        loop = asyncio.get_event_loop()
+        
+        # Добавляем субтитры в тот же filter_complex (один проход вместо двух)
+        if ass_path and ass_path.exists():
+            ass_str = str(ass_path).replace('\\', '/')
+            if len(ass_str) > 1 and ass_str[1] == ':':
+                ass_str = ass_str[0] + '\\\\:' + ass_str[2:]
+            fonts_str = str(self.fonts_dir).replace('\\', '/')
+            if len(fonts_str) > 1 and fonts_str[1] == ':':
+                fonts_str = fonts_str[0] + '\\\\:' + fonts_str[2:]
+            filter_chain = f"{filter_chain},subtitles={ass_str}:fontsdir={fonts_str}"
+        
+        cmd = [
             self.ffmpeg, "-y",
             "-ss", str(segment["start"]),
             "-i", video_path,
             "-t", str(segment["end"] - segment["start"]),
             "-filter_complex", filter_chain,
             "-c:v", video_codec,
-            "-preset", video_preset,
-        ] + video_quality + [
+        ]
+        if video_preset:
+            cmd += ["-preset", video_preset]
+        cmd += video_quality + [
             "-c:a", "aac",
-            "-b:a", "128k",
+            "-b:a", "192k",
             "-movflags", "+faststart",
-            "-threads", "2",
-            str(temp_video)
+            str(output_path)
         ]
         
-        print(f"[FFMPEG] [{index}] Pass 1 (video): {' '.join(cmd1[:10])}...")
+        print(f"[FFMPEG] [{index}] Render: {' '.join(cmd[:10])}...")
         
-        loop = asyncio.get_event_loop()
-        result1 = await loop.run_in_executor(None, lambda: subprocess.run(cmd1, capture_output=True, timeout=300))
+        result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=300))
         
-        if result1.returncode != 0:
-            print(f"[FFMPEG] [{index}] Pass 1 Error: {result1.returncode}")
-            error_msg = result1.stderr.decode('utf-8', errors='ignore') if result1.stderr else 'None'
-            print(f"[FFMPEG] [{index}] stderr: {error_msg[:200]}")
-            # Fallback: если GPU кодировщик не сработал — пробуем CPU
+        if result.returncode != 0:
+            print(f"[FFMPEG] [{index}] Error: {result.returncode}")
+            error_msg = result.stderr.decode('utf-8', errors='ignore') if result.stderr else 'None'
+            print(f"[FFMPEG] [{index}] stderr: {error_msg[:500]}")
+            # Fallback на CPU если GPU кодировщик не сработал
             if self.gpu_encoder and video_codec != "libx264":
-                print(f"[FFMPEG] Retrying Pass 1 with libx264 (GPU encoder failed)...")
-                cmd1[cmd1.index(video_codec)] = "libx264"
-                cmd1[cmd1.index("-preset") + 1] = "ultrafast"
-                qpos = -4
-                for i, a in enumerate(cmd1):
-                    if a == "-cq":
-                        cmd1[i] = "-crf"
-                        qpos = i
-                        break
-                if qpos >= 0 and qpos + 1 < len(cmd1):
-                    cmd1[qpos + 1] = "28"
-                result1 = await loop.run_in_executor(None, lambda: subprocess.run(cmd1, capture_output=True, timeout=300))
-                if result1.returncode == 0:
+                print(f"[FFMPEG] Retrying with libx264 (GPU encoder failed)...")
+                cmd = [self.ffmpeg, "-y",
+                    "-ss", str(segment["start"]),
+                    "-i", video_path,
+                    "-t", str(segment["end"] - segment["start"]),
+                    "-filter_complex", filter_chain,
+                    "-c:v", "libx264",
+                    "-preset", "ultrafast",
+                    "-crf", "18",
+                    "-threads", "0",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-movflags", "+faststart",
+                    str(output_path)]
+                result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=300))
+                if result.returncode == 0:
                     video_codec = "libx264"
                     video_preset = "ultrafast"
-                    video_quality = ["-crf", "28"]
-            if result1.returncode != 0:
+                    video_quality = ["-crf", "18"]
+            if result.returncode != 0:
                 if ass_path and ass_path.exists():
                     ass_path.unlink(missing_ok=True)
                 return None
-
-        if ass_path and ass_path.exists():
-            ass_str = str(ass_path).replace('\\', '/')
-            if len(ass_str) > 1 and ass_str[1] == ':':
-                ass_str = ass_str[0] + '\\\\:' + ass_str[2:]
-            cmd2 = [
-                self.ffmpeg, "-y",
-                "-i", str(temp_video),
-                "-vf", f"subtitles={ass_str}",
-                "-c:v", video_codec,
-                "-preset", video_preset,
-            ] + video_quality + [
-                "-c:a", "copy",
-                str(output_path)
-            ]
-            
-            print(f"[FFMPEG] [{index}] Pass 2 (subtitles): {' '.join(cmd2[:10])}...")
-            
-            result2 = await loop.run_in_executor(None, lambda: subprocess.run(cmd2, capture_output=True, timeout=300))
-            
-            if result2.returncode != 0:
-                print(f"[FFMPEG] [{index}] Pass 2 Error: {result2.returncode}")
-                error_msg = result2.stderr.decode('utf-8', errors='ignore') if result2.stderr else 'None'
-                print(f"[FFMPEG] [{index}] stderr: {error_msg[:200]}")
-                temp_video.unlink(missing_ok=True)
-                if ass_path and ass_path.exists():
-                    ass_path.unlink(missing_ok=True)
-                return None
-            
-            temp_video.unlink(missing_ok=True)
-        else:
-            temp_video.rename(output_path)
         
         # Чистим временные ASS файлы
         if ass_path and ass_path.exists():
@@ -552,7 +571,7 @@ class VideoProcessor:
         }
         return colors.get(color_name, "0xFFFFFF")
     
-    async def get_subtitles(self, video_path: str, start: float, end: float, model_size: str = "small", word_timestamps: bool = True):
+    async def get_subtitles(self, video_path: str, start: float, end: float, model_size: str = "base", word_timestamps: bool = True):
         try:
             model = self._get_whisper_model(model_size)
             
@@ -567,8 +586,8 @@ class VideoProcessor:
             
             cmd = [
                 self.ffmpeg, "-y",
-                "-i", video_path,
                 "-ss", str(start),
+                "-i", video_path,
                 "-t", str(end - start),
                 "-ar", "16000",
                 "-ac", "1",

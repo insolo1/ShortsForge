@@ -30,21 +30,27 @@ class AIService:
         video_title = video_info.get("title", "") if video_info else ""
         
         try:
-            prompt = f"""Ты - эксперт по созданию контента для YouTube Shorts. 
-Создай цепляющий заголовок и описание для короткого видео.
+            prompt = f"""Ты — топовый SEO-специалист и эксперт по вирусным алгоритмам YouTube Shorts. 
+Твоя задача — проанализировать исходные данные видео и создать метаданные, которые обеспечат максимальный CTR (кликабельность), вовлечение аудитории и органический охват.
 
-Видео: {video_title}
-Время: {transcript}
+Входные данные:
+- Тема или базовое название: {video_title}
+- Контекст / Транскрибация видео: {transcript}
 
-Правила:
-1. Заголовок должен быть с #хештегами для вирусности
-2. Описание должно заканчиваться на "Подпишись!"
-3. Теги - низкочастотные слова на английском
+Правила генерации:
+1. ЗАГОЛОВОК (title): Должен создавать сильную интригу (curiosity gap) или бить в эмоции (шок, юмор, польза). Длина — до 60 символов, чтобы текст не обрезался на экранах смартфонов. Добавь 2-3 релевантных и популярных #хештега.
+2. ОПИСАНИЕ (description): Напиши 2-3 коротких предложения. Первое предложение должно служить "хуком" (крючком) для зрителя. Органично впиши ключевые слова по теме видео для SEO-оптимизации. Описание должно строго заканчиваться фразой: "Подпишись!"
+3. ТЕГИ (tags): Сгенерируй 10-15 тегов. Это должны быть низкочастотные и среднечастотные поисковые запросы (long-tail keywords) СТРОГО НА АНГЛИЙСКОМ ЯЗЫКЕ, чтобы алгоритм рекомендовал ролик на глобальную аудиторию.
+4. ФОРМАТ ВЫВОДА: Верни ТОЛЬКО валидный JSON. Не пиши никаких вступительных слов, не используй форматирование Markdown (без ```json). Твой ответ должен сразу начинаться с символа {{ и заканчиваться символом }}.
 
-Пример формата:
-{{"title": "#shorts #видео #тренд Крутой момент!", "description": "Смотри до конца! 🔥 Подпишись!", "tags": ["shorts", "viral", "trending", "fun", "wow"]}}
+Пример ожидаемого вывода:
+{{
+  "title": "Секрет, который от нас скрывали! 🤫 #shorts #лайфхак",
+  "description": "Узнай, как этот простой трюк меняет всё. Ты делал это неправильно всю жизнь! 🔥 Подпишись!",
+  "tags": ["mindblowing secret trick", "daily life hack hidden", "viral satisfying moment", "how to do it right", "lifehack compilation"]
+}}
 
-Создай JSON с title, description, tags."""
+Выполни задачу для текущих входных данных и верни JSON:"""
 
             response = self.client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
@@ -61,7 +67,7 @@ class AIService:
             return {
                 "title": metadata.get("title", f"#shorts #{short_num}"),
                 "description": metadata.get("description", "Подпишись!"),
-                "tags": metadata.get("tags", ["shorts", "viral"])
+                "tags": ["#" + t.strip("# ") for t in metadata.get("tags", ["shorts", "viral"])]
             }
             
         except Exception as e:
@@ -72,7 +78,7 @@ class AIService:
         return {
             "title": f"#shorts #тренд #{short_num} 🔥",
             "description": "Смотри до конца! Подпишись! 👍",
-            "tags": ["shorts", "viral", "trending", "fun", "wow", "amazing"]
+            "tags": ["#shorts", "#viral", "#trending", "#fun", "#wow", "#amazing"]
         }
     
     async def select_best_segments(self, full_transcript: str, short_length: int = 45) -> list:

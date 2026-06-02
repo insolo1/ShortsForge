@@ -94,15 +94,21 @@ services:
       - ./videobot/tokens:/app/tokens
       - ./videobot/google_credentials:/app/google_credentials
       - ./videobot/saved:/app/saved
+      - whisper_cache:/app/.cache/whisper
     environment:
       - FFMPEG_PATH=/usr/bin/ffmpeg
       - PYTHONPATH=/app
+      - WHISPER_CACHE_DIR=/app/.cache/whisper
+      - OMP_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
+      - OPENBLAS_NUM_THREADS=2
       - TZ=Asia/Yekaterinburg
     networks:
       - app_network
 
 volumes:
   postgres_data:
+  whisper_cache:
 
 networks:
   app_network:

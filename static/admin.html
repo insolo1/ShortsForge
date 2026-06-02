@@ -11,7 +11,6 @@
         .card { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); }
         @media (max-width: 640px) {
             .admin-header { flex-direction: column; gap: 0.5rem; align-items: flex-start; }
-            .admin-header > div:last-child { width: 100; }
             .video-card { flex-direction: column !important; }
             .video-card img { width: 100% !important; height: auto !important; }
             .video-stats { flex-wrap: wrap; gap: 0.5rem !important; }
@@ -37,7 +36,54 @@
             </div>
         </header>
 
-        <!-- Общая статистика -->
+        <div id="input-section" class="card rounded-xl p-6 mb-8">
+            <h3 class="text-lg font-semibold mb-4">Анализ YouTube канала</h3>
+            <div class="flex flex-col sm:flex-row gap-3 mb-3">
+                <input type="text" id="channel-url" placeholder="https://youtube.com/@channel или https://youtube.com/channel/UC..."
+                    class="flex-1 p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                <button id="analyze-btn" class="px-6 py-3 rounded-xl font-bold bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 transition">
+                    📊 Анализировать
+                </button>
+            </div>
+            <div class="flex gap-2 flex-wrap">
+                <button id="analyze-all-btn" class="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 transition text-sm">
+                    Анализировать все аккаунты
+                </button>
+                <button id="compare-btn" class="px-4 py-2 rounded-lg bg-blue-700 hover:bg-blue-600 transition text-sm hidden">
+                    ⚖ Сравнить каналы
+                </button>
+            </div>
+            <div id="analyze-error" class="mt-3 text-red-400 text-sm hidden"></div>
+        </div>
+
+        <div id="channel-info" class="hidden card rounded-xl p-6 mb-8">
+            <div class="flex items-center gap-4 mb-6 flex-wrap">
+                <img id="channel-avatar" class="w-16 h-16 rounded-full bg-gray-700" src="" alt="">
+                <div>
+                    <h2 id="channel-title" class="text-2xl font-bold"></h2>
+                    <p id="channel-desc" class="text-sm text-gray-400 max-w-xl"></p>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="p-4 bg-gray-800 rounded-xl border border-gray-700 text-center">
+                    <div class="text-gray-400 text-sm mb-1">Подписчики</div>
+                    <div class="text-2xl font-bold" id="ch-subs">0</div>
+                </div>
+                <div class="p-4 bg-gray-800 rounded-xl border border-gray-700 text-center">
+                    <div class="text-gray-400 text-sm mb-1">Всего просмотров</div>
+                    <div class="text-2xl font-bold" id="ch-views">0</div>
+                </div>
+                <div class="p-4 bg-gray-800 rounded-xl border border-gray-700 text-center">
+                    <div class="text-gray-400 text-sm mb-1">Всего видео</div>
+                    <div class="text-2xl font-bold" id="ch-videos">0</div>
+                </div>
+                <div class="p-4 bg-gray-800 rounded-xl border border-gray-700 text-center">
+                    <div class="text-gray-400 text-sm mb-1">Средний CTR</div>
+                    <div class="text-2xl font-bold" id="ch-avg-ctr">0%</div>
+                </div>
+            </div>
+        </div>
+
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
             <div class="card rounded-xl p-6">
                 <div class="text-gray-400 text-sm mb-2">Всего видео</div>
@@ -61,155 +107,165 @@
             </div>
         </div>
 
-        <!-- Графики -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        <div id="charts-row" class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
             <div class="card rounded-xl p-6">
-                <h3 class="text-lg font-semibold mb-4">Просмотры за 7 дней</h3>
+                <h3 class="text-lg font-semibold mb-4">Просмотры видео</h3>
                 <canvas id="views-chart"></canvas>
             </div>
             <div class="card rounded-xl p-6">
-                <h3 class="text-lg font-semibold mb-4">Прирост подписчиков</h3>
-                <canvas id="subscribers-chart"></canvas>
+                <h3 class="text-lg font-semibold mb-4">CTR видео</h3>
+                <canvas id="ctr-chart"></canvas>
             </div>
         </div>
 
-        <!-- Список аккаунтов -->
+        <div id="comparison-section" class="hidden card rounded-xl p-6 mb-8">
+            <h3 class="text-lg font-semibold mb-4">⚖ Сравнение каналов</h3>
+            <div id="comparison-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            </div>
+        </div>
+
         <div class="card rounded-xl p-6 mb-8">
             <h3 class="text-xl font-semibold mb-4">YouTube аккаунты</h3>
             <div class="overflow-x-auto">
                 <table class="w-full">
                     <thead>
                         <tr class="border-b border-gray-700">
-                            <th class="text-left py-3 px-4">Email</th>
-                            <th class="text-left py-3 px-4">Видео</th>
-                            <th class="text-left py-3 px-4">Просмотры</th>
+                            <th class="text-left py-3 px-4">Канал</th>
                             <th class="text-left py-3 px-4">Подписчики</th>
+                            <th class="text-left py-3 px-4">Просмотры</th>
+                            <th class="text-left py-3 px-4">Видео</th>
                             <th class="text-left py-3 px-4">Статус</th>
                             <th class="text-left py-3 px-4">Действия</th>
                         </tr>
                     </thead>
                     <tbody id="accounts-list">
-                        <!-- Заполняется JS -->
                     </tbody>
                 </table>
             </div>
         </div>
 
-        <!-- Список видео -->
         <div class="card rounded-xl p-6">
             <div class="flex justify-between items-center mb-4">
                 <h3 class="text-xl font-semibold">Последние видео</h3>
                 <select id="sort-by" class="px-4 py-2 rounded-xl bg-gray-800 border border-gray-700">
                     <option value="date">По дате</option>
                     <option value="views">По просмотрам</option>
-                    <option value="ctr">По CTR</option>
+                    <option value="likes">По лайкам</option>
                 </select>
             </div>
             <div class="space-y-4" id="videos-list">
-                <!-- Заполняется JS -->
             </div>
         </div>
     </div>
 
     <script>
-        let viewsChart, subscribersChart;
+        let viewsChart, ctrChart;
+        let analyzedChannels = [];
 
         async function loadAnalytics() {
             try {
                 const response = await fetch('/api/admin/analytics');
                 const data = await response.json();
-                
-                // Обновляем общую статистику
-                document.getElementById('total-videos').textContent = data.total_videos;
+
+                document.getElementById('total-videos').textContent = formatNumber(data.total_videos);
                 document.getElementById('total-views').textContent = formatNumber(data.total_views);
                 document.getElementById('total-subscribers').textContent = formatNumber(data.total_subscribers);
-                document.getElementById('avg-ctr').textContent = data.avg_ctr.toFixed(1) + '%';
-                
+                document.getElementById('avg-ctr').textContent = (data.avg_ctr || 0).toFixed(1) + '%';
+
                 document.getElementById('videos-change').textContent = '+' + data.videos_today + ' за сегодня';
                 document.getElementById('views-change').textContent = '+' + formatNumber(data.views_today) + ' за сегодня';
                 document.getElementById('subscribers-change').textContent = '+' + data.subscribers_today + ' за сегодня';
-                
-                // Обновляем графики
-                updateCharts(data.views_7days, data.subscribers_7days);
-                
-                // Обновляем список аккаунтов
+
+                updateCharts(data.videos);
                 updateAccountsList(data.accounts);
-                
-                // Обновляем список видео
                 updateVideosList(data.videos);
-                
+
             } catch (error) {
                 console.error('Error loading analytics:', error);
             }
         }
 
-        function updateCharts(viewsData, subscribersData) {
-            const labels = viewsData.map(d => d.date);
-            
-            // График просмотров
-            if (viewsChart) viewsChart.destroy();
-            const viewsCtx = document.getElementById('views-chart').getContext('2d');
-            viewsChart = new Chart(viewsCtx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: 'Просмотры',
-                        data: viewsData.map(d => d.count),
-                        borderColor: 'rgb(236, 72, 153)',
-                        backgroundColor: 'rgba(236, 72, 153, 0.1)',
-                        tension: 0.4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } },
-                        x: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } }
-                    }
-                }
+        function updateCharts(videos) {
+            const sorted = [...videos].sort((a, b) => (a.published_at || '').localeCompare(b.published_at || ''));
+            const labels = sorted.map(v => {
+                const d = v.published_at ? new Date(v.published_at) : null;
+                return d ? d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : '—';
             });
-            
-            // График подписчиков
-            if (subscribersChart) subscribersChart.destroy();
-            const subsCtx = document.getElementById('subscribers-chart').getContext('2d');
-            subscribersChart = new Chart(subsCtx, {
+            const viewsData = sorted.map(v => v.views || 0);
+            const ctrData = sorted.map(v => v.views > 0 ? +((v.likes / v.views) * 100).toFixed(1) : 0);
+
+            const commonOpts = {
+                responsive: true,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } },
+                    x: { ticks: { color: '#9ca3af', maxRotation: 45 }, grid: { color: 'rgba(255,255,255,0.1)' } }
+                }
+            };
+
+            if (viewsChart) viewsChart.destroy();
+            const ctx1 = document.getElementById('views-chart').getContext('2d');
+            viewsChart = new Chart(ctx1, {
                 type: 'bar',
                 data: {
-                    labels: labels,
+                    labels,
                     datasets: [{
-                        label: 'Подписчики',
-                        data: subscribersData.map(d => d.count),
-                        backgroundColor: 'rgba(168, 85, 247, 0.8)',
+                        label: 'Просмотры',
+                        data: viewsData,
+                        backgroundColor: 'rgba(236, 72, 153, 0.7)',
+                        borderColor: 'rgb(236, 72, 153)',
+                        borderWidth: 1
                     }]
                 },
-                options: {
-                    responsive: true,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        y: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } },
-                        x: { ticks: { color: '#9ca3af' }, grid: { color: 'rgba(255,255,255,0.1)' } }
-                    }
-                }
+                options: commonOpts
+            });
+
+            if (ctrChart) ctrChart.destroy();
+            const ctx2 = document.getElementById('ctr-chart').getContext('2d');
+            ctrChart = new Chart(ctx2, {
+                type: 'line',
+                data: {
+                    labels,
+                    datasets: [{
+                        label: 'CTR (лайки/просмотры)',
+                        data: ctrData,
+                        borderColor: 'rgb(168, 85, 247)',
+                        backgroundColor: 'rgba(168, 85, 247, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: commonOpts
             });
         }
 
         function updateAccountsList(accounts) {
             const list = document.getElementById('accounts-list');
+            if (!accounts || accounts.length === 0) {
+                list.innerHTML = '<tr><td colspan="6" class="py-4 text-center text-gray-500">Нет авторизованных аккаунтов</td></tr>';
+                return;
+            }
             list.innerHTML = accounts.map(acc => `
                 <tr class="border-b border-gray-700 hover:bg-gray-800/50">
-                    <td class="py-3 px-4">${acc.email}</td>
-                    <td class="py-3 px-4">${acc.videos_count}</td>
-                    <td class="py-3 px-4">${formatNumber(acc.views)}</td>
+                    <td class="py-3 px-4">
+                        <div class="flex items-center gap-2">
+                            ${acc.channel_avatar ? `<img src="${acc.channel_avatar}" class="w-8 h-8 rounded-full">` : ''}
+                            <div>
+                                <div class="font-medium">${acc.channel_title || acc.email}</div>
+                                <div class="text-xs text-gray-500">${acc.email}</div>
+                            </div>
+                        </div>
+                    </td>
                     <td class="py-3 px-4">${formatNumber(acc.subscribers)}</td>
+                    <td class="py-3 px-4">${formatNumber(acc.views)}</td>
+                    <td class="py-3 px-4">${acc.videos_count}</td>
                     <td class="py-3 px-4">
                         <span class="px-2 py-1 rounded text-xs ${acc.status === 'active' ? 'bg-green-600' : 'bg-red-600'}">
                             ${acc.status === 'active' ? 'Активен' : 'Неактивен'}
                         </span>
                     </td>
                     <td class="py-3 px-4">
-                        <button onclick="viewAccount('${acc.email}')" class="text-purple-400 hover:text-purple-300">
+                        <button onclick="viewChannel('${acc.email}')" class="text-purple-400 hover:text-purple-300">
                             Подробнее →
                         </button>
                     </td>
@@ -219,46 +275,183 @@
 
         function updateVideosList(videos) {
             const list = document.getElementById('videos-list');
-            list.innerHTML = videos.map(video => `
+            const sortBy = document.getElementById('sort-by').value;
+            const sorted = [...videos].sort((a, b) => {
+                if (sortBy === 'views') return (b.views || 0) - (a.views || 0);
+                if (sortBy === 'likes') return (b.likes || 0) - (a.likes || 0);
+                return (b.published_at || '').localeCompare(a.published_at || '');
+            });
+
+            if (sorted.length === 0) {
+                list.innerHTML = '<div class="text-center text-gray-500 py-8">Нет видео</div>';
+                return;
+            }
+
+            list.innerHTML = sorted.map(video => `
                 <div class="card rounded-xl p-4 flex gap-4 video-card">
-                    <img src="${video.thumbnail}" class="w-32 h-20 rounded object-cover flex-shrink-0" onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22120%22 height=%2280%22%3E%3Crect fill=%22%23374151%22 width=%22120%22 height=%2280%22/%3E%3C/svg%3E'">
+                    <img src="${video.thumbnail || ''}" class="w-32 h-20 rounded object-cover flex-shrink-0" onerror="this.style.display='none'">
                     <div class="flex-1 min-w-0">
-                        <h4 class="font-semibold mb-1 truncate">${video.title}</h4>
-                        <p class="text-sm text-gray-400 mb-2">${video.account}</p>
+                        <h4 class="font-semibold mb-1 truncate">${escapeHtml(video.title || 'Без названия')}</h4>
+                        <p class="text-sm text-gray-400 mb-2">${video.account || ''}</p>
                         <div class="flex flex-wrap gap-2 sm:gap-4 text-sm video-stats">
-                            <span>👁 ${formatNumber(video.views)} просмотров</span>
-                            <span>👍 ${formatNumber(video.likes)} лайков</span>
-                            <span>💬 ${formatNumber(video.comments)} комментариев</span>
-                            <span>📊 CTR: ${video.ctr}%</span>
+                            <span>👁 ${formatNumber(video.views)}</span>
+                            <span>👍 ${formatNumber(video.likes)}</span>
+                            <span>💬 ${formatNumber(video.comments)}</span>
+                            ${video.ctr ? `<span>📊 CTR: ${video.ctr}%</span>` : ''}
                         </div>
                     </div>
-                    <div class="text-right">
-                        <div class="text-sm text-gray-400">${video.published_date}</div>
-                        <a href="${video.url}" target="_blank" class="text-purple-400 hover:text-purple-300 text-sm">
-                            Открыть →
-                        </a>
+                    <div class="text-right shrink-0">
+                        <div class="text-sm text-gray-400">${video.published_at ? new Date(video.published_at).toLocaleDateString('ru-RU') : ''}</div>
+                        ${video.url ? `<a href="${video.url}" target="_blank" class="text-purple-400 hover:text-purple-300 text-sm">Открыть →</a>` : ''}
                     </div>
                 </div>
             `).join('');
         }
 
+        async function analyzeChannel(url) {
+            const errorEl = document.getElementById('analyze-error');
+            errorEl.classList.add('hidden');
+
+            if (!url) {
+                errorEl.textContent = 'Введите URL YouTube канала';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+
+            const btn = document.getElementById('analyze-btn');
+            btn.disabled = true;
+            btn.textContent = 'Анализируем...';
+
+            try {
+                const res = await fetch('/api/admin/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || 'Ошибка анализа');
+                }
+
+                const data = await res.json();
+                showChannelInfo(data.channel, data.videos);
+
+                analyzedChannels.push(data.channel);
+                document.getElementById('compare-btn').classList.toggle('hidden', analyzedChannels.length < 2);
+                if (analyzedChannels.length >= 2) updateComparison();
+
+                document.getElementById('input-section').scrollIntoView({ behavior: 'smooth' });
+
+            } catch (e) {
+                errorEl.textContent = 'Ошибка: ' + e.message;
+                errorEl.classList.remove('hidden');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '📊 Анализировать';
+            }
+        }
+
+        function showChannelInfo(channel, videos) {
+            document.getElementById('channel-info').classList.remove('hidden');
+            document.getElementById('channel-title').textContent = channel.title;
+            document.getElementById('channel-desc').textContent = channel.description;
+            document.getElementById('channel-avatar').src = channel.avatar || '';
+            document.getElementById('ch-subs').textContent = formatNumber(channel.subscribers);
+            document.getElementById('ch-views').textContent = formatNumber(channel.views);
+            document.getElementById('ch-videos').textContent = channel.videos_count;
+
+            const avgCtr = videos.length > 0
+                ? (videos.reduce((s, v) => s + (v.views > 0 ? v.likes / v.views : 0), 0) / videos.length * 100).toFixed(1)
+                : 0;
+            document.getElementById('ch-avg-ctr').textContent = avgCtr + '%';
+
+            updateCharts(videos);
+            updateVideosList(videos);
+        }
+
+        function updateComparison() {
+            const grid = document.getElementById('comparison-grid');
+            document.getElementById('comparison-section').classList.remove('hidden');
+
+            grid.innerHTML = analyzedChannels.map(ch => `
+                <div class="p-4 bg-gray-800 rounded-xl border border-gray-700">
+                    <div class="flex items-center gap-2 mb-3">
+                        ${ch.avatar ? `<img src="${ch.avatar}" class="w-8 h-8 rounded-full">` : ''}
+                        <span class="font-semibold truncate">${ch.title}</span>
+                    </div>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex justify-between"><span class="text-gray-400">Подписчики</span><span class="font-medium">${formatNumber(ch.subscribers)}</span></div>
+                        <div class="flex justify-between"><span class="text-gray-400">Просмотры</span><span class="font-medium">${formatNumber(ch.views)}</span></div>
+                        <div class="flex justify-between"><span class="text-gray-400">Видео</span><span class="font-medium">${ch.videos_count}</span></div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function viewChannel(email) {
+            const fakeUrl = 'https://www.youtube.com/@' + email.split('@')[0];
+            analyzeChannel(fakeUrl);
+        }
+
+        async function analyzeAllAccounts() {
+            const btn = document.getElementById('analyze-all-btn');
+            btn.disabled = true;
+            btn.textContent = 'Анализируем...';
+            try {
+                const res = await fetch('/api/admin/analytics');
+                const data = await res.json();
+                for (const acc of data.accounts) {
+                    if (acc.status === 'active' && acc.channel_title) {
+                        analyzedChannels.push({
+                            title: acc.channel_title,
+                            avatar: acc.channel_avatar || '',
+                            subscribers: acc.subscribers,
+                            views: acc.views,
+                            videos_count: acc.videos_count
+                        });
+                    }
+                }
+                document.getElementById('compare-btn').classList.toggle('hidden', analyzedChannels.length < 2);
+                if (analyzedChannels.length >= 2) updateComparison();
+                updateCharts(data.videos);
+                updateAccountsList(data.accounts);
+                updateVideosList(data.videos);
+            } catch (e) {
+                console.error(e);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Анализировать все аккаунты';
+            }
+        }
+
+        function escapeHtml(value) {
+            return String(value).replace(/[&<>"']/g, (ch) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[ch]));
+        }
+
         function formatNumber(num) {
             if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
             if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
-            return num.toString();
-        }
-
-        function viewAccount(email) {
-            alert('Подробная информация об аккаунте: ' + email);
+            return (num || 0).toString();
         }
 
         document.getElementById('refresh-btn').addEventListener('click', loadAnalytics);
-        document.getElementById('sort-by').addEventListener('change', loadAnalytics);
+        document.getElementById('sort-by').addEventListener('change', () => {
+            const videos = window._lastVideos || [];
+            updateVideosList(videos);
+        });
+        document.getElementById('analyze-btn').addEventListener('click', () => {
+            analyzeChannel(document.getElementById('channel-url').value.trim());
+        });
+        document.getElementById('channel-url').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') analyzeChannel(e.target.value.trim());
+        });
+        document.getElementById('analyze-all-btn').addEventListener('click', analyzeAllAccounts);
+        document.getElementById('compare-btn').addEventListener('click', updateComparison);
 
-        // Загружаем данные при старте
         loadAnalytics();
-        
-        // Автообновление каждые 5 минут
         setInterval(loadAnalytics, 300000);
     </script>
 </body>

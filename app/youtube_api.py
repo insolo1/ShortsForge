@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import pickle
 from pathlib import Path
@@ -179,3 +180,174 @@ class YouTubeAPI:
         except Exception as e:
             print(f"[YOUTUBE API] Error listing videos: {str(e)}")
             return []
+
+    def get_channel_by_url(self, url: str) -> Optional[dict]:
+        """Получить информацию о канале по URL (публичные данные)"""
+        try:
+            if not self.youtube:
+                return None
+
+            channel_id = self._extract_channel_id(url)
+            if not channel_id:
+                # Попробуем найти через search
+                return self._search_channel(url)
+
+            request = self.youtube.channels().list(
+                part='snippet,statistics',
+                id=channel_id
+            )
+            response = request.execute()
+            return response['items'][0] if response.get('items') else None
+
+        except Exception as e:
+            print(f"[YOUTUBE API] Error getting channel by URL: {str(e)}")
+            return None
+
+    def _extract_channel_id(self, url: str) -> Optional[str]:
+        """Извлечь ID канала из URL"""
+        # youtube.com/channel/UC...
+        m = re.search(r'(?:youtube\.com|youtu\.be)/channel/([a-zA-Z0-9_-]{10,})', url)
+        if m:
+            return m.group(1)
+        # youtube.com/@handle
+        m = re.search(r'(?:youtube\.com|youtu\.be)/@([a-zA-Z0-9_-]+)', url)
+        if m:
+            try:
+                resp = self.youtube.channels().list(
+                    part='id',
+                    forHandle=m.group(1)
+                ).execute()
+                if resp.get('items'):
+                    return resp['items'][0]['id']
+            except:
+                pass
+            return m.group(1)
+        # youtube.com/c/... или youtube.com/user/...
+        return None
+
+    def _search_channel(self, url: str) -> Optional[dict]:
+        """Поиск канала через search API"""
+        try:
+            # Извлекаем имя из URL
+            name = re.sub(r'https?://(www\.)?youtube\.com/(c|user)/', '', url).rstrip('/')
+            if not name:
+                return None
+
+            resp = self.youtube.search().list(
+                part='snippet',
+                q=name,
+                type='channel',
+                maxResults=1
+            ).execute()
+
+            if not resp.get('items'):
+                return None
+
+            channel_id = resp['items'][0]['snippet']['channelId']
+            channel_resp = self.youtube.channels().list(
+                part='snippet,statistics',
+                id=channel_id
+            ).execute()
+
+            return channel_resp['items'][0] if channel_resp.get('items') else None
+
+        except Exception as e:
+            print(f"[YOUTUBE API] Search channel error: {str(e)}")
+            return None
+
+    def get_channel_videos(self, channel_id: str, max_results: int = 20) -> List[dict]:
+        """Получить список последних видео канала со статистикой"""
+        try:
+            if not self.youtube:
+                return []
+
+            # Получаем ID видео
+            search_resp = self.youtube.search().list(
+                part='id',
+                channelId=channel_id,
+                type='video',
+                maxResults=min(max_results, 50),
+                order='date'
+            ).execute()
+
+            video_ids = [item['id']['videoId'] for item in search_resp.get('items', [])]
+            if not video_ids:
+                return []
+
+            # Получаем статистику по всем видео
+            return self.get_video_details(video_ids)
+
+        except Exception as e:
+            print(f"[YOUTUBE API] Error getting channel videos: {str(e)}")
+            return []
+
+    def get_video_details(self, video_ids: List[str]) -> List[dict]:
+        """Получить детальную информацию о видео (статистика + сниппет)"""
+        try:
+            if not self.youtube or not video_ids:
+                return []
+
+            videos = []
+            # YouTube API позволяет до 50 ID за запрос
+            for i in range(0, len(video_ids), 50):
+                batch = video_ids[i:i+50]
+                resp = self.youtube.videos().list(
+                    part='snippet,statistics',
+                    id=','.join(batch)
+                ).execute()
+
+                for item in resp.get('items', []):
+                    snippet = item.get('snippet', {})
+                    stats = item.get('statistics', {})
+                    videos.append({
+                        'id': item['id'],
+                        'title': snippet.get('title', ''),
+                        'description': snippet.get('description', ''),
+                        'published_at': snippet.get('publishedAt', ''),
+                        'thumbnail': snippet.get('thumbnails', {}).get('high', {}).get('url', ''),
+                        'views': int(stats.get('viewCount', 0)),
+                        'likes': int(stats.get('likeCount', 0)),
+                        'comments': int(stats.get('commentCount', 0)),
+                    })
+
+            return videos
+
+        except Exception as e:
+            print(f"[YOUTUBE API] Error getting video details: {str(e)}")
+            return []
+
+    def get_accounts_with_stats(self) -> List[dict]:
+        """Получить список всех авторизованных аккаунтов со статистикой"""
+        accounts = []
+        for token_file in self.tokens_dir.glob("token_*.pickle"):
+            email = token_file.stem.replace('token_', '').replace('_', '@', 1)
+            email = email.replace('_at_', '@')
+            try:
+                if self.authenticate(email):
+                    info = self.get_channel_info()
+                    if info:
+                        stats = info.get('statistics', {})
+                        accounts.append({
+                            'email': email,
+                            'has_token': True,
+                            'channel_id': info.get('id', ''),
+                            'channel_title': info.get('snippet', {}).get('title', ''),
+                            'channel_avatar': info.get('snippet', {}).get('thumbnails', {}).get('default', {}).get('url', ''),
+                            'videos_count': int(stats.get('videoCount', 0)),
+                            'views': int(stats.get('viewCount', 0)),
+                            'subscribers': int(stats.get('subscriberCount', 0)),
+                            'status': 'active'
+                        })
+                    else:
+                        accounts.append({
+                            'email': email,
+                            'has_token': True,
+                            'status': 'inactive'
+                        })
+            except:
+                accounts.append({
+                    'email': email,
+                    'has_token': True,
+                    'status': 'inactive'
+                })
+        return accounts
