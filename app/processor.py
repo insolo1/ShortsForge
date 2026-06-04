@@ -1,9 +1,24 @@
 import os
 import asyncio
 import subprocess
+import re
 from pathlib import Path
 from typing import List, Dict
-from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).parent.parent
+
+def _read_env(key: str, default: str = "") -> str:
+    """Читает значение из .env напрямую (обходит os.environ / load_dotenv)"""
+    env_path = BASE_DIR / ".env"
+    if env_path.exists():
+        try:
+            text = env_path.read_text(encoding="utf-8")
+            m = re.search(rf"^{re.escape(key)}\s*=\s*'?([^'\n]*)'?\s*$", text, re.MULTILINE)
+            if m:
+                return m.group(1).strip()
+        except Exception:
+            pass
+    return default
 
 class VideoProcessor:
     _whisper_model = None
@@ -83,11 +98,21 @@ class VideoProcessor:
 
     @classmethod
     def _get_whisper_model(cls, model_size="base"):
-        """Singleton Whisper model - загружается один раз"""
+        """Singleton Whisper model - загружается один раз, авто CUDA"""
         if cls._whisper_model is None or cls._whisper_model_size != model_size:
-            print(f"[WHISPER] Loading model '{model_size}' (singleton)...")
+            device = "cpu"
+            compute_type = "int8"
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    device = "cuda"
+                    compute_type = "float16"
+                    print(f"[WHISPER] CUDA detected: {torch.cuda.get_device_name(0)}")
+            except ImportError:
+                pass
+            print(f"[WHISPER] Loading model '{model_size}' ({device}, {compute_type})...")
             from faster_whisper import WhisperModel
-            cls._whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8")
+            cls._whisper_model = WhisperModel(model_size, device=device, compute_type=compute_type)
             cls._whisper_model_size = model_size
         return cls._whisper_model
     
@@ -156,8 +181,7 @@ class VideoProcessor:
             end = start + short_length
             windows.append((float(start), float(end)))
         
-        load_dotenv(override=True)
-        openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        openai_api_key = _read_env("OPENAI_API_KEY", "")
         
         # Один вызов: 2 ffmpeg (аудио + видео целиком) + 1 LLM запрос
         candidates = extract_features_for_windows(
@@ -168,7 +192,7 @@ class VideoProcessor:
             return self._default_segments(duration, short_length, shorts_count)
         
         # Обучаем скорер
-        scorer = SegmentScorer(input_dim=11, n_epochs=20, learning_rate=1e-2, top_ratio=0.2)
+        scorer = SegmentScorer(input_dim=14, n_epochs=20, learning_rate=1e-2, top_ratio=0.2)
         scorer.fit(candidates)
         ranked = scorer.rank_segments(candidates)
         
@@ -276,6 +300,8 @@ class VideoProcessor:
             total_words = 0
             speech_duration = 0.0
             count = 0
+            phrase_lengths = []
+            window_text_parts = []
             j = phrase_idx
             while j < len(phrases) and phrases[j]["start"] < end:
                 p = phrases[j]
@@ -283,16 +309,44 @@ class VideoProcessor:
                     total_words += p["words"]
                     speech_duration += p["duration"]
                     count += 1
+                    phrase_lengths.append(p["words"])
+                    window_text_parts.append(p.get("full_text", ""))
                 j += 1
             
             if count == 0:
                 continue
             
+            window_text = " ".join(window_text_parts)
             density = total_words / short_length
             speech_ratio = speech_duration / short_length
-            avg_phrase_len = total_words / count
+            avg_phrase_len = total_words / max(count, 1)
             
-            score = (total_words * 1.0) + (density * 10) + (speech_ratio * 20) + (avg_phrase_len * 2)
+            # Лексическое разнообразие (уникальные слова / всего слов)
+            words_lower = window_text.lower().split()
+            unique_ratio = len(set(words_lower)) / max(len(words_lower), 1)
+            
+            # Эмоциональные триггеры из текста
+            exclamations = window_text.count('!')
+            questions = window_text.count('?')
+            emotion_boost = (exclamations * 3) + (questions * 2)
+            
+            # Вариативность темпа (std длины фраз / средняя)
+            pacing_var = 0.0
+            if count >= 3:
+                mean_pl = sum(phrase_lengths) / count
+                if mean_pl > 0:
+                    variance = sum((pl - mean_pl) ** 2 for pl in phrase_lengths) / count
+                    pacing_var = (variance ** 0.5) / mean_pl
+            
+            # Нормализованный скор (0-1 по каждой метрике)
+            score = (
+                min(density / 5.0, 1.0) * 25 +
+                min(speech_ratio, 1.0) * 25 +
+                min(avg_phrase_len / 20.0, 1.0) * 15 +
+                unique_ratio * 15 +
+                min(emotion_boost / 10.0, 1.0) * 10 +
+                min(pacing_var, 1.0) * 10
+            )
             
             candidates.append({
                 "start": float(start),
@@ -301,7 +355,10 @@ class VideoProcessor:
                 "words": total_words,
                 "density": density,
                 "speech_ratio": speech_ratio,
-                "phrases": count
+                "phrases": count,
+                "unique_ratio": unique_ratio,
+                "emotion_boost": emotion_boost,
+                "pacing_var": pacing_var
             })
         
         if not candidates:
@@ -355,117 +412,99 @@ class VideoProcessor:
             segments.append({"start": start, "end": end})
         return segments
     
-    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False) -> str:
+    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False, banner_enabled: bool = False, banner_path: str = None, banner_x: int = 0, banner_y: int = 0, banner_w: int = 1080, banner_h: int = 200, banner_opacity: int = 100) -> str:
         kw_part = f"_{filename_keywords}" if filename_keywords else ""
         output_path = self.output_dir / f"short_{job_id}_{index}{kw_part}.mp4"
 
-        subtitle_font = "Verdana"
-        
-        env_path = Path(__file__).parent.parent / ".env"
-        subtitle_font = "Verdana"
-        subtitle_style = "normal"
-        subtitle_fontsize = 75
-        subtitle_fontcolor = "white"
-        subtitle_position = 600
-        subtitle_capitalize = True
-        subtitle_borderw = 0
-        subtitle_bordercolor = "black"
-        subtitle_boxborder = 0
-        subtitle_boxcolor = "black@0.8"
-        subtitle_shadowx = 0
-        subtitle_shadowy = 0
-        subtitle_shadowcolor = "black"
-        subtitle_words_count = 5
-        subtitle_word_fade = True
-
-        if env_path.exists():
-            with open(env_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('SUBTITLE_FONT='):
-                        subtitle_font = line.split('=')[1].strip().strip('"')
-                    elif line.startswith('SUBTITLE_STYLE='):
-                        subtitle_style = line.split('=')[1].strip().strip('"')
-                    elif line.startswith('SUBTITLE_FONTSIZE='):
-                        subtitle_fontsize = int(line.split('=')[1].strip())
-                    elif line.startswith('SUBTITLE_FONTCOLOR='):
-                        subtitle_fontcolor = line.split('=')[1].strip().strip('"')
-                    elif line.startswith('SUBTITLE_POSITION_Y='):
-                        subtitle_position = int(line.split('=')[1].strip())
-                    elif line.startswith('SUBTITLE_CAPITALIZE='):
-                        subtitle_capitalize = line.split('=')[1].strip() == '1'
-                    elif line.startswith('SUBTITLE_BORDERW='):
-                        subtitle_borderw = int(line.split('=')[1].strip())
-                    elif line.startswith('SUBTITLE_BORDERCOLOR='):
-                        subtitle_bordercolor = line.split('=')[1].strip().strip('"')
-                    elif line.startswith('SUBTITLE_BOX_BORDER='):
-                        subtitle_boxborder = int(line.split('=')[1].strip())
-                    elif line.startswith('SUBTITLE_BOX_COLOR='):
-                        subtitle_boxcolor = line.split('=')[1].strip().strip('"')
-                    elif line.startswith('SUBTITLE_SHADOW_X='):
-                        subtitle_shadowx = int(line.split('=')[1].strip())
-                    elif line.startswith('SUBTITLE_SHADOW_Y='):
-                        subtitle_shadowy = int(line.split('=')[1].strip())
-                    elif line.startswith('SUBTITLE_SHADOW_COLOR='):
-                        subtitle_shadowcolor = line.split('=')[1].strip().strip('"')
-                    elif line.startswith('SUBTITLE_WORDS_COUNT='):
-                        subtitle_words_count = int(line.split('=')[1].strip())
-                    elif line.startswith('SUBTITLE_WORD_FADE='):
-                        subtitle_word_fade = line.split('=')[1].strip() == '1'
+        subtitle_font = _read_env("SUBTITLE_FONT", "Montserrat")
+        subtitle_style = _read_env("SUBTITLE_STYLE", "normal")
+        subtitle_fontsize = int(_read_env("SUBTITLE_FONTSIZE", "100"))
+        subtitle_fontcolor = _read_env("SUBTITLE_FONTCOLOR", "white")
+        subtitle_position = int(_read_env("SUBTITLE_POSITION_Y", "1670"))
+        subtitle_capitalize = _read_env("SUBTITLE_CAPITALIZE", "1") == "1"
+        subtitle_borderw = int(_read_env("SUBTITLE_BORDERW", "3"))
+        subtitle_bordercolor = _read_env("SUBTITLE_BORDERCOLOR", "black")
+        subtitle_boxborder = int(_read_env("SUBTITLE_BOX_BORDER", "0"))
+        subtitle_boxcolor = _read_env("SUBTITLE_BOX_COLOR", "black@0.8")
+        subtitle_shadowx = int(_read_env("SUBTITLE_SHADOW_X", "2"))
+        subtitle_shadowy = int(_read_env("SUBTITLE_SHADOW_Y", "2"))
+        subtitle_shadowcolor = _read_env("SUBTITLE_SHADOW_COLOR", "black")
+        subtitle_words_count = int(_read_env("SUBTITLE_WORDS_COUNT", "3"))
+        subtitle_word_fade = _read_env("SUBTITLE_WORD_FADE", "1") == "1"
+        print(f"[SETTINGS] font={subtitle_font} size={subtitle_fontsize} pos={subtitle_position} borderw={subtitle_borderw} bordercolor={subtitle_bordercolor} shadow=({subtitle_shadowx},{subtitle_shadowy}) boxborder={subtitle_boxborder}")
         
         segment_start = segment["start"]
         ass_path = None
+        subtitle_drawtext_filters = []
 
         if subtitle_segments:
-            ass_path = self.output_dir / f"subs_{job_id}_{index}.ass"
-            
-            hex_rgb = self.color_to_hex(subtitle_fontcolor).replace('0x', '')
-            r, g, b = hex_rgb[0:2], hex_rgb[2:4], hex_rgb[4:6]
-            primary_color = f"&H00{b}{g}{r}&"
-            
-            bold_val = 1 if subtitle_style in ("bold", "bold_italic") else 0
-            italic_val = 1 if subtitle_style in ("italic", "bold_italic") else 0
-            outline_val = subtitle_borderw if subtitle_borderw > 0 else 0
-            shadow_val = 1 if (subtitle_shadowx > 0 or subtitle_shadowy > 0) else 0
-            margin_v = 1920 - subtitle_position
+            esc_text = lambda t: t.replace("'", "'\\\\\\''").replace(":", "\\:").replace("%", "\\\\\\%")
+            font_file = self.fonts_dir / f"{subtitle_font}.ttf"
+            dt_font = f":fontfile={font_file}" if font_file.exists() else f":font={subtitle_font}"
+            dt_style = (
+                f"{dt_font}"
+                f":fontsize={subtitle_fontsize}"
+                f":fontcolor={subtitle_fontcolor}"
+                f":x=(w-text_w)/2"
+                f":y={subtitle_position}"
+            )
+            if subtitle_borderw > 0 and subtitle_bordercolor != "none":
+                dt_style += f":borderw={subtitle_borderw}:bordercolor={subtitle_bordercolor}"
+            if subtitle_shadowx > 0 or subtitle_shadowy > 0:
+                dt_style += f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={subtitle_shadowcolor}"
+            if subtitle_boxborder > 0 and subtitle_boxcolor != "none":
+                dt_style += f":box=1:boxborderw={subtitle_boxborder}:boxcolor={subtitle_boxcolor}"
+            if subtitle_style in ("bold", "bold_italic"):
+                dt_style += ":fontweight=700"
+            if subtitle_style in ("italic", "bold_italic"):
+                dt_style += ":fontstyle=italic"
 
-            with open(ass_path, 'w', encoding='utf-8-sig') as f:
-                f.write('[Script Info]\n')
-                f.write('PlayResX: 1080\n')
-                f.write('PlayResY: 1920\n\n')
-                f.write('[V4+ Styles]\n')
-                f.write('Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n')
-                f.write(f'Style: Default,{subtitle_font},{subtitle_fontsize},{primary_color},&H000000FF,&H00000000,&H00000000,{bold_val},{italic_val},0,0,100,100,0,0,1,{outline_val},{shadow_val},2,20,20,{margin_v},1\n\n')
-                f.write('[Events]\n')
-                f.write('Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n')
-                
-                def fmt_ass(t):
-                    hours = int(t // 3600)
-                    minutes = int((t % 3600) // 60)
-                    seconds = int(t % 60)
-                    cs = int((t % 1) * 100)
-                    return f"{hours}:{minutes:02d}:{seconds:02d}.{cs:02d}"
-                
-                for idx, seg in enumerate(subtitle_segments, 1):
-                    start_t = seg['start']
-                    end_t = seg['end']
-                    if start_t < 0:
-                        start_t = 0
-                    text = seg['text'].strip().replace('\\', r'\N')
-                    if subtitle_capitalize:
-                        text = text.capitalize()
-                    f.write(f'Dialogue: 0,{fmt_ass(start_t)},{fmt_ass(end_t)},Default,,0,0,0,,{text}\n')
+            for seg in subtitle_segments:
+                start_t = max(0, seg['start'])
+                end_t = seg['end']
+                text = seg['text'].strip()
+                if subtitle_capitalize:
+                    text = text.capitalize()
+                text = esc_text(text)
+                subtitle_drawtext_filters.append(
+                    f"drawtext=text='{text}'{dt_style}:enable='between(t,{start_t},{end_t})'"
+                )
 
         if crop_fill:
             if blurred_bg:
                 print(f"[FFMPEG] [{index}] crop_fill + blurred_bg both enabled, using crop_fill (square fg + blurred bg)")
-            filter_chain = "[0:v]split=2[bg_in][fg_in];[bg_in]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg];[fg_in]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg];[bg][fg]overlay=0:(H-h)/2"
+            filter_parts = [
+                "[0:v]split=2[bg_in][fg_in]",
+                "[bg_in]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg]",
+                "[fg_in]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg]",
+                "[bg][fg]overlay=0:(H-h)/2[vid_out]"
+            ]
         elif blurred_bg:
-            filter_chain = "[0:v]split=2[bg_in][fg_in];[bg_in]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg];[fg_in]scale=1080:-1[fg];[bg][fg]overlay=0:(H-h)/2"
+            filter_parts = [
+                "[0:v]split=2[bg_in][fg_in]",
+                "[bg_in]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg]",
+                "[fg_in]scale=1080:-1[fg]",
+                "[bg][fg]overlay=0:(H-h)/2[vid_out]"
+            ]
         else:
-            filter_chain = "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
-        
-        print(f"[FFMPEG] [{index}] crop_fill={crop_fill}, blurred_bg={blurred_bg}, filter={filter_chain[:60]}...")
+            filter_parts = [
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[vid_out]"
+            ]
+
+        # Добавляем баннер поверх видео
+        use_banner = banner_enabled and banner_path and Path(banner_path).exists()
+        if use_banner:
+            banner_scale_filter = f"scale={banner_w}:{banner_h}"
+            opacity = max(0.0, min(1.0, banner_opacity / 100.0))
+            filter_parts.append(f"[1:v]loop=-1:1:0,setpts=N/FRAME_RATE/TB,{banner_scale_filter}[banner]")
+            if opacity < 1.0:
+                filter_parts.append(f"[vid_out][banner]overlay={banner_x}:{banner_y}:format=auto,format=rgba,colorchannelmixer=aa={opacity}[vid_out]")
+            else:
+                filter_parts.append(f"[vid_out][banner]overlay={banner_x}:{banner_y}[vid_out]")
+
+        filter_chain = ";".join(filter_parts)
+
+        print(f"[FFMPEG] [{index}] crop_fill={crop_fill}, blurred_bg={blurred_bg}, banner={use_banner}, filter={filter_chain[:60]}...")
 
         # GPU или CPU
         if self.gpu_encoder == "h264_nvenc":
@@ -485,22 +524,22 @@ class VideoProcessor:
             video_preset = "ultrafast"
             video_quality = ["-crf", "18", "-threads", "0"]
         
+        # Добавляем drawtext субтитры (цепочка: каждый берёт vid_out и отдаёт vid_out)
+        if subtitle_drawtext_filters:
+            filter_chain += ";" + ";".join(
+                f"[vid_out]{f}[vid_out]" for f in subtitle_drawtext_filters
+            )
+        
         loop = asyncio.get_event_loop()
-        
-        # Добавляем субтитры в тот же filter_complex (один проход вместо двух)
-        if ass_path and ass_path.exists():
-            ass_str = str(ass_path).replace('\\', '/')
-            if len(ass_str) > 1 and ass_str[1] == ':':
-                ass_str = ass_str[0] + '\\\\:' + ass_str[2:]
-            fonts_str = str(self.fonts_dir).replace('\\', '/')
-            if len(fonts_str) > 1 and fonts_str[1] == ':':
-                fonts_str = fonts_str[0] + '\\\\:' + fonts_str[2:]
-            filter_chain = f"{filter_chain},subtitles={ass_str}:fontsdir={fonts_str}"
-        
+
         cmd = [
             self.ffmpeg, "-y",
             "-ss", str(segment["start"]),
             "-i", video_path,
+        ]
+        if use_banner:
+            cmd += ["-i", banner_path]
+        cmd += [
             "-t", str(segment["end"] - segment["start"]),
             "-filter_complex", filter_chain,
             "-c:v", video_codec,
@@ -516,7 +555,7 @@ class VideoProcessor:
         
         print(f"[FFMPEG] [{index}] Render: {' '.join(cmd[:10])}...")
         
-        result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=300))
+        result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=300, cwd=str(BASE_DIR)))
         
         if result.returncode != 0:
             print(f"[FFMPEG] [{index}] Error: {result.returncode}")
@@ -527,7 +566,10 @@ class VideoProcessor:
                 print(f"[FFMPEG] Retrying with libx264 (GPU encoder failed)...")
                 cmd = [self.ffmpeg, "-y",
                     "-ss", str(segment["start"]),
-                    "-i", video_path,
+                    "-i", video_path]
+                if use_banner:
+                    cmd += ["-i", banner_path]
+                cmd += [
                     "-t", str(segment["end"] - segment["start"]),
                     "-filter_complex", filter_chain,
                     "-c:v", "libx264",
@@ -538,7 +580,7 @@ class VideoProcessor:
                     "-b:a", "192k",
                     "-movflags", "+faststart",
                     str(output_path)]
-                result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=300))
+                result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=300, cwd=str(BASE_DIR)))
                 if result.returncode == 0:
                     video_codec = "libx264"
                     video_preset = "ultrafast"
@@ -560,14 +602,19 @@ class VideoProcessor:
             return None
 
     def color_to_hex(self, color_name: str) -> str:
-        """Convert color name to FFmpeg drawtext format (0xRRGGBB)"""
+        """Convert color name to ASS hex string (without &H prefix)"""
         colors = {
             "white": "0xFFFFFF",
             "yellow": "0xFFFF00",
             "red": "0xFF0000",
             "green": "0x00FF00",
             "blue": "0x0000FF",
-            "black": "0x000000"
+            "cyan": "0x00FFFF",
+            "magenta": "0xFF00FF",
+            "orange": "0xFFA500",
+            "gray": "0x808080",
+            "black": "0x000000",
+            "none": "0x000000",
         }
         return colors.get(color_name, "0xFFFFFF")
     

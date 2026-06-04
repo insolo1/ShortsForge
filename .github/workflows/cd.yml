@@ -1,0 +1,49 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types:
+      - completed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}/backend:latest
+
+      - name: Build and push worker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.worker
+          push: true
+          tags: ghcr.io/${{ github.repository }}/worker:latest
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd /opt/videobot
+            docker compose pull
+            docker compose up -d --force-recreate

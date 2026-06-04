@@ -25,6 +25,7 @@ _FFMPEG = os.getenv("FFMPEG_PATH", "ffmpeg")
 
 FEATURE_KEYS = [
     "total_words", "density", "speech_ratio", "avg_phrase_len",
+    "unique_ratio", "emotion_boost", "pacing_var",
     "energy_mean", "energy_peak", "energy_variance", "silence_ratio",
     "scene_changes", "face_count_avg", "motion_intensity",
 ]
@@ -36,7 +37,7 @@ class InterestNet(nn.Module):
     Вход: 11 признаков → 32 → 16 → 1 (Sigmoid)
     """
 
-    def __init__(self, input_dim: int = 11, hidden_dims: Optional[List[int]] = None) -> None:
+    def __init__(self, input_dim: int = 14, hidden_dims: Optional[List[int]] = None) -> None:
         super().__init__()
         if hidden_dims is None:
             hidden_dims = [32, 16]
@@ -68,7 +69,7 @@ class SegmentScorer:
 
     def __init__(
         self,
-        input_dim: int = 11,
+        input_dim: int = 14,
         hidden_dims: Optional[List[int]] = None,
         n_epochs: int = 100,
         learning_rate: float = 1e-2,
@@ -475,6 +476,7 @@ def extract_features_for_windows(
         total_words = 0
         speech_duration = 0.0
         count = 0
+        phrase_lengths = []
         window_text_parts = []
         j = phrase_idx
         while j < len(phrases) and phrases[j]["start"] < end:
@@ -483,6 +485,7 @@ def extract_features_for_windows(
                 total_words += p.get("words", 0)
                 speech_duration += p.get("duration", 0)
                 count += 1
+                phrase_lengths.append(p.get("words", 0))
                 window_text_parts.append(p.get("full_text", ""))
             j += 1
 
@@ -495,8 +498,25 @@ def extract_features_for_windows(
         avg_phrase_len = total_words / count
         window_text = " ".join(window_text_parts)
 
+        # Вариативность темпа
+        pacing_var = 0.0
+        if count >= 3:
+            mean_pl = sum(phrase_lengths) / count
+            if mean_pl > 0:
+                variance = sum((pl - mean_pl) ** 2 for pl in phrase_lengths) / count
+                pacing_var = (variance ** 0.5) / mean_pl
+
         audio_feats = audio_cache.get_features(start, end)
         visual_feats = visual_cache.get_features(start, end)
+
+        # Лексическое разнообразие
+        words_lower = window_text.lower().split()
+        unique_ratio = len(set(words_lower)) / max(len(words_lower), 1)
+
+        # Эмоциональные триггеры
+        exclamations = window_text.count('!')
+        questions = window_text.count('?')
+        emotion_boost = (exclamations * 3) + (questions * 2)
 
         features = {
             "start": start,
@@ -507,12 +527,21 @@ def extract_features_for_windows(
             "avg_phrase_len": avg_phrase_len,
             "words": total_words,
             "phrases": count,
+            "unique_ratio": unique_ratio,
+            "emotion_boost": emotion_boost,
+            "pacing_var": pacing_var,
             "transcript": window_text,
         }
         features.update(audio_feats)
         features.update(visual_feats)
 
-        heuristic = (total_words * 1.0) + (density * 10) + (speech_ratio * 20) + (avg_phrase_len * 2)
+        heuristic = (
+            min(density / 5.0, 1.0) * 25 +
+            min(speech_ratio, 1.0) * 25 +
+            min(avg_phrase_len / 20.0, 1.0) * 15 +
+            unique_ratio * 15 +
+            min(emotion_boost / 10.0, 1.0) * 10
+        )
         features["score"] = heuristic
 
         if openai_api_key and len(window_text.strip()) >= 10:

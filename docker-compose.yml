@@ -1,7 +1,35 @@
 services:
-  videobot:
-    build: .
-    container_name: videobot
+  postgres:
+    image: postgres:16-alpine
+    container_name: videobot-db
+    restart: unless-stopped
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: videobot
+      POSTGRES_USER: videobot
+      POSTGRES_PASSWORD: videobot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U videobot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: videobot-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: videobot-api
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -15,27 +43,56 @@ services:
       - ./client_secret.json:/app/client_secret.json:ro
       - whisper_cache:/app/.cache/whisper
     environment:
-      - FFMPEG_PATH=/usr/bin/ffmpeg
-      - PYTHONPATH=/app
-      - OMP_NUM_THREADS=4
-      - MKL_NUM_THREADS=4
-      - OPENBLAS_NUM_THREADS=4
+      - DATABASE_URL=postgresql+asyncpg://videobot:videobot@postgres:5432/videobot
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
       - TZ=Europe/Moscow
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
-    devices:
-      # Для Raspberry Pi V4L2 аппаратного кодирования
-      - /dev/video10:/dev/video10
-      - /dev/video11:/dev/video11
-    # Требуется nvidia-container-toolkit на хосте:
-    #   sudo apt install nvidia-container-toolkit && sudo systemctl restart docker
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu, video]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: videobot-worker
+    restart: unless-stopped
+    volumes:
+      - ./uploads:/app/uploads
+      - ./output:/app/output
+      - ./tokens:/app/tokens
+      - ./google_credentials:/app/google_credentials
+      - ./saved:/app/saved
+      - ./.env:/app/.env:ro
+      - ./client_secret.json:/app/client_secret.json:ro
+      - whisper_cache:/app/.cache/whisper
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://videobot:videobot@postgres:5432/videobot
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - OMP_NUM_THREADS=2
+      - TZ=Europe/Moscow
+    deploy:
+      replicas: 2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: videobot-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
 
 volumes:
+  pgdata:
   whisper_cache:

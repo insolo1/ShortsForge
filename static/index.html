@@ -26,6 +26,44 @@
             #progress-section, #results-section { padding: 0.5rem; }
             .cleanup-btns { width: 100%; }
         }
+        /* Custom range slider */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            height: 6px;
+            background: linear-gradient(90deg, #374151, #7c3aed);
+            border-radius: 4px;
+            outline: none;
+            cursor: pointer;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #a78bfa, #7c3aed);
+            border: 2px solid #1a1a2e;
+            box-shadow: 0 0 8px rgba(124, 58, 237, 0.5);
+            transition: box-shadow 0.2s;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover {
+            box-shadow: 0 0 14px rgba(124, 58, 237, 0.8);
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #a78bfa, #7c3aed);
+            border: 2px solid #1a1a2e;
+            box-shadow: 0 0 8px rgba(124, 58, 237, 0.5);
+            cursor: pointer;
+        }
+        input[type="range"]::-moz-range-track {
+            height: 6px;
+            background: linear-gradient(90deg, #374151, #7c3aed);
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body class="min-h-screen text-white">
@@ -38,11 +76,70 @@
                 <button onclick="window.location.href='/admin'" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 transition text-sm">
                     Админ
                 </button>
+
+                
                 <span id="username-display" class="text-gray-400 flex items-center"></span>
                 <button id="logout-btn" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 transition text-sm">
                     Выход
                 </button>
             </div>
+
+            <div class="flex flex-wrap justify-center gap-3 mb-4">
+                <span id="stats-btn" class="px-4 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 transition text-sm cursor-pointer hidden">
+                    Статистика
+                </span>
+                <button id="docs-btn" class="px-4 py-2 rounded-xl bg-gray-700 hover:bg-gray-600 transition text-sm">
+                    Документация
+                </button>
+            </div>
+
+            <div id="stats-modal" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden">
+                <div class="bg-gray-900 rounded-2xl p-6 w-96 max-w-full mx-4 border border-gray-700 shadow-2xl">
+                    <div class="flex justify-between items-center mb-5">
+                        <h3 class="text-lg font-bold">Статистика</h3>
+                        <span id="stats-modal-close" class="text-gray-400 hover:text-white cursor-pointer text-xl leading-none">&times;</span>
+                    </div>
+                    <div class="space-y-4 text-sm">
+                        <div class="flex justify-between items-center py-2 border-b border-gray-800">
+                            <span class="text-gray-400">Всего обработано видео</span>
+                            <span id="stat-videos" class="font-bold text-purple-400 text-lg">0</span>
+                        </div>
+                        <div class="flex justify-between items-center py-2 border-b border-gray-800">
+                            <span class="text-gray-400">Создано шортсов</span>
+                            <span id="stat-shorts" class="font-bold text-purple-400 text-lg">0</span>
+                        </div>
+                        <div class="flex justify-between items-center py-2 border-b border-gray-800">
+                            <span class="text-gray-400">Успешно завершено</span>
+                            <span id="stat-completed" class="font-bold text-green-400 text-lg">0</span>
+                        </div>
+                        <div class="flex justify-between items-center py-2 border-b border-gray-800">
+                            <span class="text-gray-400">С ошибками</span>
+                            <span id="stat-failed" class="font-bold text-red-400 text-lg">0</span>
+                        </div>
+                        <div class="flex justify-between items-center py-2 border-b border-gray-800">
+                            <span class="text-gray-400">Сейчас обрабатывается</span>
+                            <span id="stat-running" class="font-bold text-blue-400 text-lg">0</span>
+                        </div>
+                        <div class="flex justify-between items-center py-2">
+                            <span class="text-gray-400">Всего задач за всё время</span>
+                            <span id="stat-jobs" class="font-bold text-gray-300 text-lg">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="docs-modal" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden">
+                <div class="bg-gray-900 rounded-2xl p-6 w-[500px] max-w-full mx-4 border border-gray-700 shadow-2xl max-h-[80vh] flex flex-col">
+                    <div class="flex justify-between items-center mb-5">
+                        <h3 class="text-lg font-bold">📖 Документация</h3>
+                        <span id="docs-modal-close" class="text-gray-400 hover:text-white cursor-pointer text-xl leading-none">&times;</span>
+                    </div>
+                    <div id="docs-list" class="space-y-2 overflow-y-auto flex-1 text-sm">
+                        <div class="text-gray-500 text-center py-8">Загрузка...</div>
+                    </div>
+                </div>
+            </div>
+
             <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-pink-500 to-purple-500 bg-clip-text text-transparent">
                 Видео в Shorts
             </h1>
@@ -86,9 +183,23 @@
                     </div>
                 </div>
 
-                <div class="flex items-center gap-2 mb-4">
-                    <input type="checkbox" id="smart-selection-url" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
-                    <span class="text-sm text-gray-400">Выбрать лучшие моменты</span>
+                <div class="mb-4">
+                    <label class="text-sm text-gray-400 block mb-2">Выбрать лучшие моменты</label>
+                    <div class="flex rounded-xl overflow-hidden border border-gray-700">
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="url" data-mode="off" style="background:#374151;color:#9CA3AF">
+                            <input type="radio" name="smart-mode-url" value="off" class="hidden" checked> Выкл
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="url" data-mode="global" style="background:#374151;color:#FCA5A5">
+                            <input type="radio" name="smart-mode-url" value="global" class="hidden"> Топ
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="url" data-mode="parts" style="background:#374151;color:#93C5FD">
+                            <input type="radio" name="smart-mode-url" value="parts" class="hidden"> Сетка
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="url" data-mode="hybrid" style="background:#374151;color:#86EFAC">
+                            <input type="radio" name="smart-mode-url" value="hybrid" class="hidden"> Гибрид
+                        </label>
+                    </div>
+                    <div id="smart-desc-url" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
                 </div>
 
                 <div class="flex items-center gap-2 mb-4">
@@ -98,6 +209,11 @@
                 <div class="flex items-center gap-2 mb-4">
                     <input type="checkbox" id="crop-fill-url" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
                     <span class="text-sm text-gray-400">Увеличить видео (обрезать края, без полос)</span>
+                </div>
+
+                <div class="flex items-center gap-2 mb-4">
+                    <input type="checkbox" id="banner-enabled-url" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-400">Баннер поверх видео</span>
                 </div>
 
                 <div class="flex items-center gap-2 mb-2">
@@ -164,7 +280,12 @@
                         <p id="file-name" class="text-purple-400 mt-2 text-sm hidden"></p>
                     </label>
                 </div>
-                
+
+                <div class="flex items-center gap-2 mb-4">
+                    <input type="checkbox" id="folder-mode-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-400">Папка с несколькими видео (обработать все)</span>
+                </div>
+
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Длина (сек)</label>
@@ -178,9 +299,23 @@
                     </div>
                 </div>
 
-                <div class="flex items-center gap-2 mb-4">
-                    <input type="checkbox" id="smart-selection-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
-                    <span class="text-sm text-gray-400">Выбрать лучшие моменты</span>
+                <div class="mb-4">
+                    <label class="text-sm text-gray-400 block mb-2">Выбрать лучшие моменты</label>
+                    <div class="flex rounded-xl overflow-hidden border border-gray-700">
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="file" data-mode="off" style="background:#374151;color:#9CA3AF">
+                            <input type="radio" name="smart-mode-file" value="off" class="hidden" checked> Выкл
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="file" data-mode="global" style="background:#374151;color:#FCA5A5">
+                            <input type="radio" name="smart-mode-file" value="global" class="hidden"> Топ
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="file" data-mode="parts" style="background:#374151;color:#93C5FD">
+                            <input type="radio" name="smart-mode-file" value="parts" class="hidden"> Сетка
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="file" data-mode="hybrid" style="background:#374151;color:#86EFAC">
+                            <input type="radio" name="smart-mode-file" value="hybrid" class="hidden"> Гибрид
+                        </label>
+                    </div>
+                    <div id="smart-desc-file" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
                 </div>
 
                 <div class="flex items-center gap-2 mb-4">
@@ -190,6 +325,11 @@
                 <div class="flex items-center gap-2 mb-4">
                     <input type="checkbox" id="crop-fill-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
                     <span class="text-sm text-gray-400">Увеличить видео (обрезать края, без полос)</span>
+                </div>
+
+                <div class="flex items-center gap-2 mb-4">
+                    <input type="checkbox" id="banner-enabled-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-400">Баннер поверх видео</span>
                 </div>
 
                 <div class="flex items-center gap-2 mb-2">
@@ -262,9 +402,13 @@
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Шрифт</label>
                         <select id="subtitle-font" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="Montserrat">Montserrat</option>
                             <option value="Arial">Arial</option>
                             <option value="Verdana">Verdana</option>
                             <option value="Impact">Impact</option>
+                            <option value="Roboto">Roboto</option>
+                            <option value="Open Sans">Open Sans</option>
+                            <option value="Ubuntu">Ubuntu</option>
                         </select>
                     </div>
                     <div>
@@ -278,7 +422,7 @@
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Размер</label>
-                        <input type="number" id="subtitle-fontsize" value="75" min="20" max="120"
+                        <input type="number" id="subtitle-fontsize" value="100" min="20" max="120"
                             class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
                     </div>
                 </div>
@@ -292,7 +436,9 @@
                             <option value="2">2 слова</option>
                             <option value="3">3 слова</option>
                             <option value="4">4 слова</option>
-                            <option value="5" selected>5 слов</option>
+                            <option value="3" selected>3 слова</option>
+                            <option value="4">4 слова</option>
+                            <option value="5">5 слов</option>
                         </select>
                     </div>
                     <div>
@@ -319,7 +465,7 @@
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Позиция Y (пикс)</label>
-                        <input type="number" id="subtitle-position" value="600" min="50" max="960"
+                        <input type="number" id="subtitle-position" value="1670" min="50" max="1920"
                             class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
                     </div>
                 </div>
@@ -345,7 +491,7 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Обводка (px)</label>
-                        <input type="number" id="subtitle-borderw" value="0" min="0" max="20"
+                        <input type="number" id="subtitle-borderw" value="6" min="0" max="20"
                             class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
                     </div>
                     <div>
@@ -383,12 +529,12 @@
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Смещение X</label>
-                        <input type="number" id="subtitle-shadowx" value="0" min="0" max="10"
+                        <input type="number" id="subtitle-shadowx" value="2" min="0" max="10"
                             class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Смещение Y</label>
-                        <input type="number" id="subtitle-shadowy" value="0" min="0" max="10"
+                        <input type="number" id="subtitle-shadowy" value="2" min="0" max="10"
                             class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
                     </div>
                     <div>
@@ -408,6 +554,24 @@
                     </label>
                 </div>
 
+                <h4 class="text-md font-semibold mb-3 mt-6">Видео</h4>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Кадрирование</label>
+                        <select id="crop-mode" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="9:16">9:16 (вертикально)</option>
+                            <option value="16:9">16:9 (горизонтально)</option>
+                            <option value="1:1">1:1 (квадрат)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2 cursor-pointer pt-6">
+                            <input type="checkbox" id="zoom-enabled" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                            <span class="text-sm text-gray-400">Zoom-эффект (динамическое кадрирование)</span>
+                        </label>
+                    </div>
+                </div>
+
                 <h4 class="text-md font-semibold mb-3 mt-6">Имена файлов</h4>
                 <div class="mb-4">
                     <label class="block text-sm text-gray-400 mb-2">Обязательные слова в названии MP4</label>
@@ -419,6 +583,46 @@
                 <button id="save-settings-btn" class="w-full py-3 rounded-xl font-bold bg-green-600 hover:bg-green-700 transition">
                     Сохранить настройки
                 </button>
+
+                <h4 class="text-md font-semibold mb-3 mt-6">Баннер</h4>
+                <div class="mb-4">
+                    <div class="flex items-center gap-2 mb-3">
+                        <input type="checkbox" id="banner-enabled-settings" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Показывать баннер в предпросмотре</span>
+                    </div>
+                    <div class="mb-3">
+                        <label class="block text-sm text-gray-400 mb-2">Файл баннера (для предпросмотра)</label>
+                        <input type="file" id="banner-file-settings" accept="image/*,video/*"
+                            class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                    </div>
+                    <div class="grid grid-cols-2 gap-3 mb-2">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">X</label>
+                            <input type="number" id="banner-x-settings" value="0" min="-1080" max="1080"
+                                class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Y</label>
+                            <input type="number" id="banner-y-settings" value="0" min="-1920" max="1920"
+                                class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Ширина</label>
+                            <input type="number" id="banner-w-settings" value="1080" min="1" max="1080"
+                                class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Высота</label>
+                            <input type="number" id="banner-h-settings" value="200" min="1" max="1920"
+                                class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-1">Прозрачность: <span id="banner-opacity-val-settings">100</span>%</label>
+                        <input type="range" id="banner-opacity-settings" min="0" max="100" value="100"
+                            class="w-full">
+                    </div>
+                </div>
 
                 <h4 class="text-md font-semibold mb-3 mt-6">Предпросмотр текста</h4>
                 <div class="mb-4">
@@ -438,6 +642,10 @@
                 </div>
                 <div class="flex justify-center mb-2">
                     <div id="subtitle-preview" class="bg-black rounded-xl border border-gray-700 relative overflow-hidden" style="width: 180px; height: 320px;">
+                        <div id="preview-banner-layer" style="position: absolute; width: 100%; height: 100%; display: none;">
+                            <img id="preview-banner-img" style="width: 100%; height: auto; opacity: 1;">
+                            <video id="preview-banner-video" muted autoplay loop playsinline style="width: 100%; height: auto; opacity: 1; display: none;"></video>
+                        </div>
                         <div id="preview-subtitle-layer" style="position: absolute; width: 100%; text-align: center;">
                             <span id="preview-text-span" style="font-size: 12px; color: white; font-family: Arial, sans-serif; line-height: 1.2; padding: 4px 8px;">Привет! Это тест субтитров</span>
                         </div>
@@ -492,10 +700,28 @@
                     <input type="checkbox" id="integration-blurred-bg" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
                     <span class="text-sm text-gray-400">Размытый фон (9:16)</span>
                 </div>
-                
                 <div class="flex items-center gap-2 mb-4">
-                    <input type="checkbox" id="integration-smart-selection" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
-                    <span class="text-sm text-gray-400">Выбрать лучшие моменты</span>
+                    <input type="checkbox" id="integration-crop-fill" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-400">Увеличить видео (обрезать края, без полос)</span>
+                </div>
+                
+                <div class="mb-4">
+                    <label class="text-sm text-gray-400 block mb-2">Выбрать лучшие моменты</label>
+                    <div class="flex rounded-xl overflow-hidden border border-gray-700">
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="integration" data-mode="off" style="background:#374151;color:#9CA3AF">
+                            <input type="radio" name="smart-mode-integration" value="off" class="hidden" checked> Выкл
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="integration" data-mode="global" style="background:#374151;color:#FCA5A5">
+                            <input type="radio" name="smart-mode-integration" value="global" class="hidden"> Топ
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="integration" data-mode="parts" style="background:#374151;color:#93C5FD">
+                            <input type="radio" name="smart-mode-integration" value="parts" class="hidden"> Сетка
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="integration" data-mode="hybrid" style="background:#374151;color:#86EFAC">
+                            <input type="radio" name="smart-mode-integration" value="hybrid" class="hidden"> Гибрид
+                        </label>
+                    </div>
+                    <div id="smart-desc-integration" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
                 </div>
 
                 <div class="flex items-center gap-2 mb-2">
@@ -514,6 +740,11 @@
                             class="flex-1 p-2 rounded-lg bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none text-sm">
                         <button onclick="createSaveFolder('integration')" class="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-sm">+</button>
                     </div>
+                </div>
+
+                <div class="flex items-center gap-2 mb-4">
+                    <input type="checkbox" id="banner-enabled-integration" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-400">Баннер поверх видео</span>
                 </div>
 
                 <h4 class="text-md font-semibold mb-3 mt-6">Музыка для видео</h4>
@@ -728,9 +959,7 @@
             </div>
         </div>
 
-        
-    </div>
-
+    
     <div id="progress-section" class="card rounded-2xl p-4 sm:p-6 mb-4 sm:mb-8 hidden">
         <h3 class="text-lg sm:text-xl font-semibold mb-4">Обработка...</h3>
         <div class="h-4 bg-gray-700 rounded-full overflow-hidden mb-2">
@@ -745,6 +974,9 @@
                 <div class="text-gray-500 text-sm">Ожидание запуска...</div>
             </div>
         </div>
+        <button id="cancel-job-btn" onclick="cancelCurrentJob()" class="mt-4 w-full py-2 rounded-xl font-bold bg-red-700 hover:bg-red-800 transition hidden">
+            ✕ Отменить обработку
+        </button>
     </div>
 
     <div id="results-section" class="hidden px-2 sm:px-0">
@@ -757,6 +989,6 @@
         <div id="shorts-list" class="space-y-6"></div>
     </div>
 
-    <script src="/static/script.js?v=4"></script>
+    <script src="/static/script.js?v=9"></script>
 </body>
 </html>

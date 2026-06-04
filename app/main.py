@@ -1,103 +1,62 @@
 import os
 import sys
+import json
+import time
+import uuid
+import hashlib
 import threading
+import asyncio
 from pathlib import Path
+from typing import Optional, List
+from contextlib import asynccontextmanager
 
 os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 os.environ["OPENBLAS_NUM_THREADS"] = "2"
 
-# Add app directory to path
+os.environ["PATH"] = ";".join([
+    r"C:\Users\DOM\AppData\Roaming\Python\Python311\site-packages\nvidia\cublas\bin",
+    r"C:\Users\DOM\AppData\Roaming\Python\Python311\site-packages\nvidia\cuda_nvrtc\bin",
+    r"C:\Users\DOM\AppData\Roaming\Python\Python311\site-packages\nvidia\cuda_runtime\bin",
+    r"C:\Users\DOM\AppData\Roaming\Python\Python311\site-packages\nvidia\cudnn\bin",
+    os.environ.get("PATH", ""),
+])
+
 sys.path.insert(0, str(Path(__file__).parent))
 
-import uuid
-import asyncio
-import json
-import hashlib
-import time
-from typing import Optional, List
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Depends
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
-from fastapi import Response
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from pydantic import BaseModel
 import aiofiles
 
-from processor import VideoProcessor
+from processor import VideoProcessor, _read_env
 from ai_service import AIService
 from youtube_api import YouTubeAPI
-try:
-    from google_cloud_automation import GoogleCloudAutomation
-except:
-    GoogleCloudAutomation = None
-
-try:
-    from disabled.playwright_automation import GoogleCloudAutomation as PlaywrightAutomation
-except:
-    PlaywrightAutomation = None
-
-import logging
-logging.getLogger("uvicorn.access").disabled = True
-logging.getLogger("uvicorn").setLevel(logging.WARNING)
-
-app = FastAPI(title="Video to Shorts Bot")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 BASE_DIR = Path(__file__).parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "output"
 USERS_FILE = BASE_DIR / "users.json"
 SESSIONS_FILE = BASE_DIR / "sessions.json"
+JOBS_FILE = BASE_DIR / "jobs.json"
+JOB_LOGS_FILE = BASE_DIR / "job_logs.json"
+PRESETS_FILE = BASE_DIR / "presets.json"
 FONTS_DIR = BASE_DIR / "fonts"
+BANNER_DIR = UPLOAD_DIR / "banners"
 
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 FONTS_DIR.mkdir(exist_ok=True)
-
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+BANNER_DIR.mkdir(exist_ok=True)
 
 processor = VideoProcessor(str(UPLOAD_DIR), str(OUTPUT_DIR))
 ai_service = AIService()
-youtube_api = YouTubeAPI(client_secret_file=str(BASE_DIR / "client_secret.json"), tokens_dir=str(BASE_DIR / "tokens"))
+youtube_api = YouTubeAPI(
+    client_secret_file=str(BASE_DIR / "client_secret.json"),
+    tokens_dir=str(BASE_DIR / "tokens")
+)
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
-
-
-def get_yt_client():
-    """Создаёт YouTube API client (API key > OAuth)"""
-    if YOUTUBE_API_KEY:
-        from googleapiclient.discovery import build
-        return build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
-    if youtube_api.youtube:
-        return youtube_api.youtube
-    return None
-
-
-def safe_account_email(email: str) -> str:
-    return email.replace('@', '_at_').replace('.', '_')
-
-
-def get_account_credentials_file(email: str) -> Path:
-    account_file = BASE_DIR / "google_credentials" / f"{safe_account_email(email)}.json"
-    if account_file.exists():
-        return account_file
-    return BASE_DIR / "client_secret.json"
-
-
-def load_users():
-    if USERS_FILE.exists():
-        with open(USERS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
-
 
 ROLES = {
     "admin": ["create_shorts", "delete_shorts", "manage_accounts", "settings", "cleanup", "view_all", "delete_all"],
@@ -106,1592 +65,1220 @@ ROLES = {
 }
 
 
-def check_permission(role: str, action: str) -> bool:
-    return action in ROLES.get(role, [])
+def _ok(data):
+    return JSONResponse({"status": "success", **data})
 
 
-def _json_write(path, data, **kwargs):
-    import time
-    for attempt in range(5):
+def _err(msg, code=400):
+    return JSONResponse({"status": "error", "message": msg}, status_code=code)
+
+
+def _load_json(path):
+    if path.exists():
         try:
-            tmp = path.with_suffix('.tmp')
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(data, f, **kwargs)
-            try:
-                os.replace(tmp, path)
-            except OSError:
-                with open(path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, **kwargs)
-            return
-        except OSError as e:
-            if attempt < 4:
-                time.sleep(0.5 * (attempt + 1))
-            else:
-                print(f"[JSON] Failed to write {path.name}: {e}")
-
-def save_users(users: list):
-    _json_write(USERS_FILE, users, indent=2)
-
-
-def load_sessions():
-    if SESSIONS_FILE.exists():
-        try:
-            with open(SESSIONS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
-
-JOBS_FILE = BASE_DIR / "jobs.json"
-
-
-def load_jobs():
-    if JOBS_FILE.exists():
-        try:
-            with open(JOBS_FILE, 'r', encoding='utf-8') as f:
+            with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except:
             return {}
     return {}
 
 
+def _save_json(path, data):
+    tmp = path.with_suffix('.tmp')
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        try:
+            os.replace(tmp, path)
+        except OSError:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[JSON] Write error: {e}")
+
+
+jobs = _load_json(JOBS_FILE)
+sessions = _load_json(SESSIONS_FILE)
+job_logs = _load_json(JOB_LOGS_FILE)
 _jobs_lock = threading.Lock()
+_job_logs_lock = threading.Lock()
+_last_log_save = 0.0
+
+# Clean old completed/failed/cancelled jobs on startup
+for jid in list(jobs.keys()):
+    if jobs[jid].get("status") in ("completed", "failed", "cancelled"):
+        del jobs[jid]
+        job_logs.pop(jid, None)
+_save_json(JOBS_FILE, jobs)
+_save_json(JOB_LOGS_FILE, job_logs)
+
+# Simple sequential job queue (1 at a time)
+_processing_busy = False
+_processing_queue = []  # list of (fn, args)
+_processing_lock = threading.Lock()
+_cancel_flag = False  # set True to stop current job
+
+
+def _enqueue_job(fn, args):
+    global _processing_busy
+    with _processing_lock:
+        if not _processing_busy:
+            _processing_busy = True
+            threading.Thread(target=_run_job_wrapper, args=(fn, args), daemon=True).start()
+            return True
+        else:
+            _processing_queue.append((fn, args))
+            return False
+
+
+def _run_job_wrapper(fn, args):
+    global _processing_busy, _cancel_flag
+    try:
+        fn(*args)
+    except Exception as e:
+        print(f"[QUEUE] Job error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        _cancel_flag = False
+        with _processing_lock:
+            if _processing_queue:
+                next_fn, next_args = _processing_queue.pop(0)
+                threading.Thread(target=_run_job_wrapper, args=(next_fn, next_args), daemon=True).start()
+            else:
+                _processing_busy = False
+
 
 def save_jobs():
     with _jobs_lock:
-        _json_write(JOBS_FILE, jobs)
+        _save_json(JOBS_FILE, jobs)
 
-
-def load_job_logs():
-    logs_file = BASE_DIR / "job_logs.json"
-    if logs_file.exists():
-        try:
-            with open(logs_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
-
-
-_job_logs_lock = threading.Lock()
 
 def save_job_logs():
     with _job_logs_lock:
-        try:
-            _json_write(BASE_DIR / "job_logs.json", job_logs)
-        except Exception:
-            pass
+        _save_json(JOB_LOGS_FILE, job_logs)
 
-
-jobs = load_jobs()
-sessions = load_sessions()
-job_logs = load_job_logs()
-
-_last_log_save = 0.0
 
 def add_job_log(job_id: str, message: str, log_type: str = "info"):
-    """Добавить лог для задачи"""
     global _last_log_save
     if job_id not in job_logs:
         job_logs[job_id] = []
-    
     job_logs[job_id].append({
-        "message": message,
-        "type": log_type,
+        "message": message, "type": log_type,
         "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
     })
-    
     if len(job_logs[job_id]) > 10000:
         job_logs[job_id] = job_logs[job_id][-10000:]
-    
     now = time.time()
     if now - _last_log_save > 5.0:
         _last_log_save = now
         save_job_logs()
 
-def save_sessions():
-    _json_write(SESSIONS_FILE, sessions)
+
+def load_users():
+    return _load_json(USERS_FILE)
 
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+def save_users(users):
+    _save_json(USERS_FILE, users)
 
 
-def verify_token(request: Request):
-    token = request.headers.get('Authorization')
+def load_sessions():
+    return _load_json(SESSIONS_FILE)
+
+
+def load_presets():
+    return _load_json(PRESETS_FILE)
+
+
+def save_presets_to_file(data):
+    _save_json(PRESETS_FILE, data)
+
+
+def hsh(pwd: str) -> str:
+    return hashlib.sha256(pwd.encode()).hexdigest()
+
+
+def safe_email(email: str) -> str:
+    return email.replace('@', '_at_').replace('.', '_')
+
+
+def get_creds(email: str) -> str:
+    f = BASE_DIR / "google_credentials" / f"{safe_email(email)}.json"
+    return str(f) if f.exists() else str(BASE_DIR / "client_secret.json")
+
+
+# ── Попробуем подключить новые модули (необязательно) ──
+_use_db = False
+try:
+    from app.core.database import init_db, close_db, get_session
+    from app.core.redis import init_redis, close_redis
+    _use_db = True
+except Exception as e:
+    print(f"[DB] Not available (non-fatal): {e}")
+
+# ── Lifespan ──
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if _use_db:
+        try:
+            await init_db()
+            await init_redis()
+            print("[BOOT] DB + Redis initialized")
+        except Exception as e:
+            print(f"[BOOT] DB init failed (continuing with JSON): {e}")
+    yield
+    if _use_db:
+        try:
+            await close_db()
+            await close_redis()
+        except:
+            pass
+
+app = FastAPI(title="Video to Shorts Bot", lifespan=lifespan, docs_url=None, redoc_url=None)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+# ── Старые (JSON-based) роуты ──
+
+def verify(request: Request):
+    token = request.headers.get('Authorization') or request.cookies.get('token')
     if not token or token not in sessions:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    return sessions[token]  # Returns {"username": ..., "role": ...}
-
-
-@app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
-    # Проверяем токен из cookie или localStorage
-    token = request.cookies.get('token')
-    if not token or token not in sessions:
-        return RedirectResponse(url='/login')
-    
-    async with aiofiles.open(BASE_DIR / "static" / "index.html", "r", encoding="utf-8") as f:
-        content = await f.read()
-    return HTMLResponse(content=content, media_type="text/html; charset=utf-8")
+    return sessions[token]
 
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page():
     async with aiofiles.open(BASE_DIR / "static" / "login.html", "r", encoding="utf-8") as f:
-        content = await f.read()
-    return HTMLResponse(content=content, media_type="text/html; charset=utf-8")
+        return HTMLResponse(content=await f.read())
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    t = request.cookies.get('token')
+    if not t or t not in sessions:
+        return RedirectResponse(url='/login')
+    async with aiofiles.open(BASE_DIR / "static" / "index.html", "r", encoding="utf-8") as f:
+        return HTMLResponse(content=await f.read())
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    t = request.cookies.get('token')
+    if not t or t not in sessions:
+        return RedirectResponse(url='/login')
+    async with aiofiles.open(BASE_DIR / "static" / "admin.html", "r", encoding="utf-8") as f:
+        return HTMLResponse(content=await f.read())
+
+
+@app.get("/notes", response_class=HTMLResponse)
+async def notes_page(request: Request):
+    t = request.cookies.get('token')
+    if not t or t not in sessions:
+        return RedirectResponse(url='/login')
+    async with aiofiles.open(BASE_DIR / "static" / "notes.html", "r", encoding="utf-8") as f:
+        return HTMLResponse(content=await f.read())
 
 
 @app.post("/api/login")
 async def login(username: str = Form(...), password: str = Form(...)):
     users = load_users()
-    password_hash = hash_password(password)
-    
-    user = next((u for u in users if u['username'] == username and u['password'] == password_hash), None)
-    
+    user = next((u for u in users if u['username'] == username and u['password'] == hsh(password)), None)
     if not user:
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
-    
     token = str(uuid.uuid4())
     sessions[token] = {"username": username, "role": user.get("role", "viewer")}
-    save_sessions()
-    
-    print(f"[LOGIN] User {username} (role: {user.get('role', 'viewer')}) logged in with token {token}")
-    
-    response = JSONResponse({"token": token, "username": username, "role": user.get("role", "viewer")})
-    response.set_cookie(
-        key="token", 
-        value=token, 
-        httponly=False,  # Разрешаем доступ из JS
-        max_age=86400*30,
-        path="/",
-        samesite="lax"
-    )
-    return response
-
-
-@app.get("/api/roles")
-async def get_roles():
-    return JSONResponse({"roles": ROLES})
-
-
-@app.get("/api/users")
-async def get_users():
-    users = load_users()
-    return JSONResponse({"status": "success", "users": [{"username": u["username"], "role": u.get("role", "viewer")} for u in users]})
-
-
-@app.post("/api/users")
-async def create_or_update_user(username: str = Form(...), password: str = Form(...), role: str = Form("viewer")):
-    users = load_users()
-    existing = next((i for i, u in enumerate(users) if u["username"] == username), -1)
-    user_data = {"username": username, "password": hash_password(password), "role": role}
-    if existing >= 0:
-        users[existing] = user_data
-    else:
-        users.append(user_data)
-    save_users(users)
-    return {"status": "success", "message": f"User {username} saved with role {role}"}
-
-
-@app.delete("/api/users/{username}")
-async def delete_user(username: str):
-    users = load_users()
-    users = [u for u in users if u["username"] != username]
-    save_users(users)
-    return {"status": "success", "message": f"User {username} deleted"}
-
-
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request):
-    token = request.cookies.get('token')
-    if not token or token not in sessions:
-        return RedirectResponse(url='/login')
-    session_data = sessions[token]
-    role = session_data.get("role", "viewer") if isinstance(session_data, dict) else "viewer"
-    if role != "admin":
-        return HTMLResponse("<h1>Доступ запрещён</h1><p>Только администраторы.</p><a href='/'>На главную</a>", status_code=403)
-    async with aiofiles.open(BASE_DIR / "static" / "admin.html", "r", encoding="utf-8") as f:
-        content = await f.read()
-    return HTMLResponse(content=content, media_type="text/html; charset=utf-8")
-
-
-@app.get("/notes", response_class=HTMLResponse)
-async def notes_page(request: Request):
-    # Проверяем токен
-    token = request.cookies.get('token')
-    print(f"[NOTES] Token from cookie: {token}")
-    print(f"[NOTES] Active sessions: {list(sessions.keys())}")
-    
-    if not token or token not in sessions:
-        print(f"[NOTES] Redirecting to login - token invalid")
-        return RedirectResponse(url='/login')
-    
-    async with aiofiles.open(BASE_DIR / "static" / "notes.html", "r", encoding="utf-8") as f:
-        content = await f.read()
-    return HTMLResponse(content=content, media_type="text/html; charset=utf-8")
-
-
-@app.get("/api/admin/analytics")
-async def get_analytics(request: Request):
-    token = request.cookies.get('token')
-    if not token or token not in sessions:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    from datetime import datetime, timedelta
-    today = datetime.now()
-    dates = [(today - timedelta(days=i)).strftime("%d.%m") for i in range(6, -1, -1)]
-
-    accounts = []
-    all_videos = []
-    total_views = 0
-    total_subscribers = 0
-    total_videos_count = 0
-
-    # Пробуем получить данные из YouTube для каждого аккаунта
-    for token_file in Path(youtube_api.tokens_dir).glob("token_*.pickle"):
-        email = token_file.stem.replace('token_', '').replace('_', '@', 1)
-        email = email.replace('_at_', '@')
-        try:
-            if youtube_api.authenticate(email):
-                info = youtube_api.get_channel_info()
-                if info:
-                    stats = info.get('statistics', {})
-                    subs = int(stats.get('subscriberCount', 0))
-                    views = int(stats.get('viewCount', 0))
-                    vids = int(stats.get('videoCount', 0))
-                    snippet = info.get('snippet', {})
-                    total_views += views
-                    total_subscribers += subs
-                    total_videos_count += vids
-                    accounts.append({
-                        'email': email,
-                        'videos_count': vids,
-                        'views': views,
-                        'subscribers': subs,
-                        'channel_title': snippet.get('title', ''),
-                        'channel_avatar': snippet.get('thumbnails', {}).get('default', {}).get('url', ''),
-                        'status': 'active'
-                    })
-                    # Получаем последние видео канала
-                    channel_id = info.get('id')
-                    if channel_id:
-                        videos = youtube_api.get_channel_videos(channel_id, 10)
-                        for v in videos:
-                            all_videos.append({
-                                **v,
-                                'account': snippet.get('title', email),
-                                'ctr': 0,
-                                'url': f"https://www.youtube.com/watch?v={v['id']}"
-                            })
-                else:
-                    accounts.append({'email': email, 'status': 'inactive', 'videos_count': 0, 'views': 0, 'subscribers': 0})
-        except:
-            accounts.append({'email': email, 'status': 'inactive', 'videos_count': 0, 'views': 0, 'subscribers': 0})
-
-    # Если нет YouTube аккаунтов, показываем локальные данные из jobs
-    if not accounts:
-        for job_id, job in jobs.items():
-            if job.get("status") == "completed" and "shorts" in job:
-                for short in job["shorts"]:
-                    total_videos_count += 1
-                    all_videos.append({
-                        "id": f"local_{short.get('id', '')}",
-                        "title": short.get("title", "Без названия"),
-                        "views": 0, "likes": 0, "comments": 0,
-                        "published_at": "",
-                        "thumbnail": "",
-                        "account": "Локальные видео",
-                        "ctr": 0,
-                        "url": ""
-                    })
-
-    all_videos.sort(key=lambda v: v.get('published_at', ''), reverse=True)
-
-    return {
-        "total_videos": total_videos_count,
-        "total_views": total_views,
-        "total_subscribers": total_subscribers,
-        "avg_ctr": 0,
-        "videos_today": 0,
-        "views_today": 0,
-        "subscribers_today": 0,
-        "views_7days": [{"date": d, "count": 0} for d in dates],
-        "subscribers_7days": [{"date": d, "count": 0} for d in dates],
-        "accounts": accounts,
-        "videos": all_videos[:50]
-    }
-
-
-def _parse_channel_url(url: str) -> Optional[str]:
-    """Извлекает channel ID из URL или возвращает None"""
-    import re
-    m = re.search(r'(?:youtube\.com|youtu\.be)/channel/([a-zA-Z0-9_-]{10,})', url)
-    if m:
-        return m.group(1)
-    m = re.search(r'(?:youtube\.com|youtu\.be)/@([a-zA-Z0-9_-]+)', url)
-    if m:
-        return '@' + m.group(1)
-    return None
-
-
-@app.post("/api/admin/analyze")
-async def admin_analyze(request: Request):
-    token = request.cookies.get('token')
-    if not token or token not in sessions:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    data = await request.json()
-    channel_url = data.get('url', '').strip()
-    if not channel_url:
-        raise HTTPException(status_code=400, detail="URL канала обязателен")
-
-    client = get_yt_client()
-    if client:
-        parsed = _parse_channel_url(channel_url)
-        if not parsed:
-            raise HTTPException(status_code=400, detail="Неверный URL канала. Примеры: https://youtube.com/@handle или https://youtube.com/channel/UC...")
-
-        # Получаем ID канала
-        channel_id = None
-        if parsed.startswith('@'):
-            try:
-                resp = client.search().list(part='snippet', q=parsed[1:], type='channel', maxResults=1).execute()
-                if resp.get('items'):
-                    channel_id = resp['items'][0]['snippet']['channelId']
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Канал не найден: {e}")
-        else:
-            channel_id = parsed
-
-        if not channel_id:
-            raise HTTPException(status_code=404, detail="Канал не найден")
-
-        # Данные канала
-        try:
-            chan_resp = client.channels().list(part='snippet,statistics', id=channel_id).execute()
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Ошибка YouTube API: {e}")
-
-        if not chan_resp.get('items'):
-            raise HTTPException(status_code=404, detail="Канал не найден")
-
-        channel = chan_resp['items'][0]
-        snippet = channel.get('snippet', {})
-        stats = channel.get('statistics', {})
-
-        videos = []
-        try:
-            search_resp = client.search().list(part='id', channelId=channel_id, type='video', maxResults=20, order='date').execute()
-            video_ids = [item['id']['videoId'] for item in search_resp.get('items', [])]
-            if video_ids:
-                vid_resp = client.videos().list(part='snippet,statistics', id=','.join(video_ids)).execute()
-                for item in vid_resp.get('items', []):
-                    vs = item.get('statistics', {})
-                    sn = item.get('snippet', {})
-                    views = int(vs.get('viewCount', 0))
-                    likes = int(vs.get('likeCount', 0))
-                    videos.append({
-                        'id': item['id'],
-                        'title': sn.get('title', ''),
-                        'published_at': sn.get('publishedAt', ''),
-                        'thumbnail': sn.get('thumbnails', {}).get('high', {}).get('url', ''),
-                        'views': views,
-                        'likes': likes,
-                        'comments': int(vs.get('commentCount', 0)),
-                        'ctr': round((likes / views * 100) if views > 0 else 0, 2),
-                        'account': snippet.get('title', ''),
-                        'url': f"https://www.youtube.com/watch?v={item['id']}"
-                    })
-        except Exception as e:
-            print(f"[YT API] Video fetch error: {e}")
-
-        return {
-            "channel": {
-                "id": channel_id,
-                "title": snippet.get('title', ''),
-                "description": snippet.get('description', '')[:300],
-                "avatar": snippet.get('thumbnails', {}).get('medium', {}).get('url', ''),
-                "country": snippet.get('country', ''),
-                "published_at": snippet.get('publishedAt', ''),
-                "subscribers": int(stats.get('subscriberCount', 0)),
-                "views": int(stats.get('viewCount', 0)),
-                "videos_count": int(stats.get('videoCount', 0)),
-            },
-            "videos": videos
-        }
-
-    # Нет API ключа — парсим страницу
-    result = await _scrape_channel(channel_url)
-    return result
+    _save_json(SESSIONS_FILE, sessions)
+    resp = JSONResponse({"token": token, "username": username, "role": user.get("role", "viewer")})
+    resp.set_cookie("token", token, httponly=False, max_age=86400*30, path="/", samesite="lax")
+    return resp
 
 
 @app.post("/api/logout")
 async def logout(request: Request):
-    token = request.cookies.get('token')
-    if token in sessions:
-        del sessions[token]
-        save_sessions()
-    
-    response = JSONResponse({"status": "success"})
-    response.delete_cookie("token")
-    return response
+    t = request.cookies.get('token')
+    sessions.pop(t, None)
+    _save_json(SESSIONS_FILE, sessions)
+    resp = JSONResponse({"status": "success"})
+    resp.delete_cookie("token")
+    return resp
 
 
-@app.post("/api/youtube/authorize")
-async def authorize_youtube(request: Request):
-    """Авторизация YouTube аккаунта через API"""
-    try:
-        data = await request.json()
-        email = data.get('email')
-        
-        if not email:
-            return JSONResponse({"status": "error", "message": "Email required"})
-
-        youtube_api.client_secret_file = str(get_account_credentials_file(email))
-        
-        # Проверяем есть ли уже токен
-        token_file = youtube_api.get_token_file(email)
-        if token_file.exists():
-            # Пробуем использовать существующий токен
-            if youtube_api.authenticate(email):
-                return JSONResponse({"status": "success", "message": f"Already authorized: {email}"})
-        
-        # Запускаем OAuth flow
-        success = youtube_api.authenticate(email)
-        
-        if success:
-            return JSONResponse({"status": "success", "message": f"Authorized: {email}"})
-        else:
-            return JSONResponse({"status": "error", "message": "Authorization failed"})
-            
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)})
+@app.get("/api/users")
+async def get_users():
+    return {"status": "success", "users": [{"username": u["username"], "role": u.get("role", "viewer")} for u in load_users()]}
 
 
-@app.post("/api/youtube/upload-credentials")
-async def upload_youtube_credentials(request: Request):
-    """Загрузка готовых credentials для аккаунта"""
-    try:
-        # multipart/form-data
-        form = await request.form()
-        email = form.get('email')
-        credentials_file = form.get('credentials')
-        
-        if not email:
-            return JSONResponse({"status": "error", "message": "Email required"})
-        if not credentials_file:
-            return JSONResponse({"status": "error", "message": "Credentials file required"})
-        
-        # Читаем содержимое файла
-        contents = await credentials_file.read()
-        
-        # Валидируем что это JSON
-        try:
-            creds_data = json.loads(contents.decode('utf-8'))
-        except:
-            return JSONResponse({"status": "error", "message": "Invalid JSON file"})
-        
-        # Проверяем структуру
-        if 'installed' not in creds_data and 'web' not in creds_data:
-            return JSONResponse({"status": "error", "message": "Invalid client_secret format"})
-        
-        # Сохраняем в папку google_credentials
-        creds_dir = BASE_DIR / "google_credentials"
-        creds_dir.mkdir(exist_ok=True)
-        
-        # Имя файла - email без @ и .
-        cred_file = creds_dir / f"{safe_account_email(email)}.json"
-        
-        with open(cred_file, 'w', encoding='utf-8') as f:
-            f.write(contents.decode('utf-8'))
-        
-        return JSONResponse({
-            "status": "success", 
-            "message": f"Credentials saved for {email}",
-            "file": str(cred_file)
-        })
-        
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)})
+@app.post("/api/users")
+async def create_user(username: str = Form(...), password: str = Form(...), role: str = Form("viewer")):
+    users = load_users()
+    i = next((idx for idx, u in enumerate(users) if u["username"] == username), -1)
+    d = {"username": username, "password": hsh(password), "role": role}
+    if i >= 0:
+        users[i] = d
+    else:
+        users.append(d)
+    save_users(users)
+    return {"status": "success"}
 
 
-@app.get("/api/youtube/accounts")
-async def get_youtube_accounts():
-    """Получить список аккаунтов с credentials"""
-    try:
-        creds_dir = BASE_DIR / "google_credentials"
-        accounts = []
-        
-        if creds_dir.exists():
-            for f in creds_dir.glob("*.json"):
-                # Читаем email из имени файла
-                email = f.stem.replace('_at_', '@').replace('_', '.')
-                # Проверяем тот же OAuth-токен, который создает YouTubeAPI.authenticate()
-                token_file = youtube_api.get_token_file(email)
-                has_token = token_file.exists()
-                accounts.append({
-                    "email": email,
-                    "credentials_file": str(f),
-                    "has_token": has_token
-                })
-        
-        return JSONResponse({"status": "success", "accounts": accounts})
-        
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)})
+@app.delete("/api/users/{username}")
+async def delete_user(username: str):
+    save_users([u for u in load_users() if u["username"] != username])
+    return {"status": "success"}
 
 
-@app.delete("/api/youtube/accounts")
-async def delete_youtube_account(request: Request):
-    """Удалить сохраненный YouTube аккаунт: credentials и OAuth-токен"""
-    try:
-        data = await request.json()
-        email = (data.get("email") or "").strip()
-
-        if not email:
-            return JSONResponse({"status": "error", "message": "Email required"})
-
-        safe_email = safe_account_email(email)
-        files_to_delete = [
-            BASE_DIR / "google_credentials" / f"{safe_email}.json",
-            youtube_api.get_token_file(email),
-            BASE_DIR / "tokens" / f"{safe_email}.json",
-        ]
-
-        deleted = []
-        for file_path in files_to_delete:
-            if file_path.exists() and file_path.is_file():
-                file_path.unlink()
-                deleted.append(str(file_path))
-
-        return JSONResponse({
-            "status": "success",
-            "message": f"Account deleted: {email}",
-            "deleted": deleted
-        })
-
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)})
+@app.get("/api/roles")
+async def get_roles():
+    return {"roles": ROLES}
 
 
-# Автоматическая настройка перенесена в папку disabled/
-
-@app.get("/api/logs/{job_id}")
-async def get_job_logs(job_id: str):
-    """Получить логи задачи"""
-    if job_id not in job_logs:
-        return JSONResponse({"logs": [], "status": "not_found", "total": 0})
-    
-    job_status = jobs.get(job_id, {}).get("status", "unknown")
-    logs = job_logs[job_id]
-    
-    return JSONResponse({
-        "logs": logs,
-        "total": len(logs),
-        "status": job_status,
-        "progress": jobs.get(job_id, {}).get("progress", 0)
-    })
-
-
-# Схемы настроек (presets)
-PRESETS_FILE = BASE_DIR / "presets.json"
-
-def load_presets():
-    if PRESETS_FILE.exists():
-        try:
-            with open(PRESETS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            return []
-    return []
-
-def save_presets_to_file(presets):
-    _json_write(PRESETS_FILE, presets, ensure_ascii=False, indent=2)
-
-
-@app.post("/api/presets/save")
-async def save_preset(request: Request):
-    """Сохранить схему настроек"""
-    try:
-        preset = await request.json()
-        
-        if not preset.get('name'):
-            return JSONResponse({"status": "error", "message": "Name required"})
-        
-        presets = load_presets()
-        
-        # Проверяем существует ли схема с таким именем
-        existing = [p for p in presets if p.get('name') == preset['name']]
-        if existing:
-            # Обновляем существующую
-            for i, p in enumerate(presets):
-                if p.get('name') == preset['name']:
-                    presets[i] = preset
-                    break
-        else:
-            # Добавляем новую
-            presets.append(preset)
-        
-        save_presets_to_file(presets)
-        
-        return JSONResponse({"status": "success", "message": "Preset saved"})
-        
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)})
+@app.get("/api/fonts")
+async def get_fonts():
+    return {"fonts": ["Arial", "Verdana", "Impact", "Montserrat", "Bebas Neue", "Russo One", "Obelix Pro", "Intro Rust"]}
 
 
 @app.get("/api/presets/list")
 async def list_presets():
-    """Получить список схем"""
-    try:
-        presets = load_presets()
-        return JSONResponse({"status": "success", "presets": presets})
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)})
+    return {"status": "success", "presets": load_presets()}
+
+
+@app.post("/api/presets/save")
+async def save_preset(data: dict):
+    presets = load_presets()
+    name = data.get("name")
+    if not name:
+        return _err("Name required")
+    for i, p in enumerate(presets):
+        if p.get("name") == name:
+            presets[i] = data
+            break
+    else:
+        presets.append(data)
+    save_presets_to_file(presets)
+    return _ok({"message": "Preset saved"})
 
 
 @app.get("/api/presets/load")
 async def load_preset(name: str):
-    """Загрузить схему по имени"""
-    try:
-        presets = load_presets()
-        preset = next((p for p in presets if p.get('name') == name), None)
-        
-        if preset:
-            return JSONResponse({"status": "success", "preset": preset})
-        else:
-            return JSONResponse({"status": "error", "message": "Preset not found"})
-            
-    except Exception as e:
-        return JSONResponse({"status": "error", "message": str(e)})
-
-
-def get_available_fonts():
-    return [
-        "Arial", "Verdana", "Impact",
-        "Montserrat", "Bebas Neue", "Russo One", "Obelix Pro", "Intro Rust"
-    ]
-
-
-@app.get("/api/fonts")
-async def api_fonts():
-    return {"fonts": get_available_fonts()}
-
-
-@app.post("/api/cleanup")
-async def api_cleanup():
-    """Удалить шорты и загруженные видео из завершённых/упавших задач"""
-    deleted = 0
-    now = time.time()
-    for job_id, job in list(jobs.items()):
-        if job.get("status") in ("completed", "failed") or (job.get("finished_at") and now - job["finished_at"] > 3600):
-            for short in job.get("shorts", []):
-                fp = short.get("filepath")
-                if fp and Path(fp).exists():
-                    try:
-                        Path(fp).unlink()
-                        deleted += 1
-                    except:
-                        pass
-            inp = UPLOAD_DIR / f"{job_id}_input.mp4"
-            if inp.exists():
-                try:
-                    inp.unlink()
-                    deleted += 1
-                except:
-                    pass
-            del jobs[job_id]
-    save_jobs()
-    return {"deleted": deleted}
+    p = next((p for p in load_presets() if p.get("name") == name), None)
+    if not p:
+        return _err("Not found", 404)
+    return _ok({"preset": p})
 
 
 @app.get("/api/settings")
 async def get_settings():
-    """Получить текущие настройки"""
     return JSONResponse({
-        "status": "success",
         "settings": {
-            "crop_mode": os.getenv("VIDEO_CROP_MODE", "9:16"),
-            "zoom_enabled": os.getenv("VIDEO_ZOOM_ENABLE", "0") == "1",
-            "font": os.getenv("SUBTITLE_FONT", "Verdana"),
-            "style": os.getenv("SUBTITLE_STYLE", "normal"),
-            "fontsize": int(os.getenv("SUBTITLE_FONTSIZE", "75")),
-            "fontcolor": os.getenv("SUBTITLE_FONTCOLOR", "white"),
-            "position": int(os.getenv("SUBTITLE_POSITION_Y", "600")),
-            "capitalize": os.getenv("SUBTITLE_CAPITALIZE", "1") == "1",
-            "borderw": int(os.getenv("SUBTITLE_BORDERW", "0")),
-            "bordercolor": os.getenv("SUBTITLE_BORDERCOLOR", "black"),
-            "boxborder": int(os.getenv("SUBTITLE_BOX_BORDER", "0")),
-            "boxcolor": os.getenv("SUBTITLE_BOX_COLOR", "black@0.8"),
-            "shadowx": int(os.getenv("SUBTITLE_SHADOW_X", "0")),
-            "shadowy": int(os.getenv("SUBTITLE_SHADOW_Y", "0")),
-            "shadowcolor": os.getenv("SUBTITLE_SHADOW_COLOR", "black"),
-            "words_count": int(os.getenv("SUBTITLE_WORDS_COUNT", "5")),
-            "word_fade": os.getenv("SUBTITLE_WORD_FADE", "1") == "1",
-            "api_provider": "groq" if os.getenv("GROQ_API_KEY") else ("openai" if os.getenv("OPENAI_API_KEY") else "groq"),
-            "api_key_masked": "***" if (os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")) else ""
+            "crop_mode": _read_env("VIDEO_CROP_MODE", "9:16"),
+            "zoom_enabled": _read_env("VIDEO_ZOOM_ENABLE", "0") == "1",
+            "font": _read_env("SUBTITLE_FONT", "Montserrat"),
+            "style": _read_env("SUBTITLE_STYLE", "normal"),
+            "fontsize": int(_read_env("SUBTITLE_FONTSIZE", "100")),
+            "fontcolor": _read_env("SUBTITLE_FONTCOLOR", "white"),
+            "position": int(_read_env("SUBTITLE_POSITION_Y", "1670")),
+            "capitalize": _read_env("SUBTITLE_CAPITALIZE", "1") == "1",
+            "borderw": int(_read_env("SUBTITLE_BORDERW", "3")),
+            "bordercolor": _read_env("SUBTITLE_BORDERCOLOR", "black"),
+            "boxborder": int(_read_env("SUBTITLE_BOX_BORDER", "0")),
+            "boxcolor": _read_env("SUBTITLE_BOX_COLOR", "black@0.8"),
+            "shadowx": int(_read_env("SUBTITLE_SHADOW_X", "2")),
+            "shadowy": int(_read_env("SUBTITLE_SHADOW_Y", "2")),
+            "shadowcolor": _read_env("SUBTITLE_SHADOW_COLOR", "black"),
+            "words_count": int(_read_env("SUBTITLE_WORDS_COUNT", "3")),
+            "word_fade": _read_env("SUBTITLE_WORD_FADE", "1") == "1",
+            "api_provider": "groq" if _read_env("GROQ_API_KEY") else ("openai" if _read_env("OPENAI_API_KEY") else "groq"),
+            "api_key_masked": "***" if (_read_env("GROQ_API_KEY") or _read_env("OPENAI_API_KEY")) else "",
         }
     })
 
 
 @app.post("/api/settings")
 async def update_settings(
-    font: str = Form("Verdana"),
-    style: str = Form("normal"),
-    fontsize: int = Form(75),
-    fontcolor: str = Form("white"),
-    position: int = Form(600),
-    capitalize: bool = Form(True),
-    crop_mode: str = Form("9:16"),
-    zoom_enabled: bool = Form(False),
-    borderw: int = Form(0),
-    bordercolor: str = Form("black"),
-    boxborder: int = Form(0),
-    boxcolor: str = Form("black@0.8"),
-    shadowx: int = Form(0),
-    shadowy: int = Form(0),
-    shadowcolor: str = Form("black"),
-    api_provider: str = Form(None),
-    api_key: str = Form(None),
-    words_count: int = Form(5),
-    word_fade: bool = Form(True)
+    font: str = Form("Montserrat"), style: str = Form("normal"),
+    fontsize: int = Form(100), fontcolor: str = Form("white"),
+    position: int = Form(1670), capitalize: bool = Form(True),
+    crop_mode: str = Form("9:16"), zoom_enabled: bool = Form(False),
+    borderw: int = Form(3), bordercolor: str = Form("black"),
+    boxborder: int = Form(0), boxcolor: str = Form("black@0.8"),
+    shadowx: int = Form(2), shadowy: int = Form(2), shadowcolor: str = Form("black"),
+    words_count: int = Form(3), word_fade: bool = Form(True),
+    api_provider: Optional[str] = Form(None), api_key: Optional[str] = Form(None),
+    banner_x: str = Form("0"), banner_y: str = Form("0"),
+    banner_w: str = Form("1080"), banner_h: str = Form("200"), banner_opacity: str = Form("100")
 ):
-    # Читаем существующие настройки из .env перед сохранением
+    from dotenv import set_key, unset_key, load_dotenv
+
+    keys_to_set = {
+        "GROQ_API_KEY": api_key if api_provider == 'groq' and api_key else _read_env('GROQ_API_KEY', ''),
+        "OPENAI_API_KEY": api_key if api_provider == 'openai' and api_key else _read_env('OPENAI_API_KEY', ''),
+        "VIDEO_CROP_MODE": crop_mode,
+        "VIDEO_ZOOM_ENABLE": '1' if zoom_enabled else '0',
+        "SUBTITLE_FONT": font,
+        "SUBTITLE_STYLE": style,
+        "SUBTITLE_FONTSIZE": str(fontsize),
+        "SUBTITLE_FONTCOLOR": fontcolor,
+        "SUBTITLE_POSITION_Y": str(position),
+        "SUBTITLE_CAPITALIZE": '1' if capitalize else '0',
+        "SUBTITLE_BORDERW": str(borderw),
+        "SUBTITLE_BORDERCOLOR": bordercolor,
+        "SUBTITLE_BOX_BORDER": str(boxborder),
+        "SUBTITLE_BOX_COLOR": boxcolor,
+        "SUBTITLE_SHADOW_X": str(shadowx),
+        "SUBTITLE_SHADOW_Y": str(shadowy),
+        "SUBTITLE_SHADOW_COLOR": shadowcolor,
+        "SUBTITLE_WORDS_COUNT": str(words_count),
+        "SUBTITLE_WORD_FADE": '1' if word_fade else '0',
+        "BANNER_X": banner_x,
+        "BANNER_Y": banner_y,
+        "BANNER_W": banner_w,
+        "BANNER_H": banner_h,
+        "BANNER_OPACITY": str(banner_opacity),
+    }
+
     env_path = BASE_DIR / ".env"
-    existing = {}
-    
-    if env_path.exists():
-        with open(env_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if '=' in line and not line.startswith('#'):
-                    key, val = line.split('=', 1)
-                    existing[key] = val.strip().strip('"')
-    
-    # Обновляем настройки
-    existing['GROQ_API_KEY'] = os.getenv('GROQ_API_KEY', '')
-    existing['VIDEO_CROP_MODE'] = crop_mode
-    existing['VIDEO_ZOOM_ENABLE'] = '1' if zoom_enabled else '0'
-    existing['SUBTITLE_FONT'] = font
-    existing['SUBTITLE_STYLE'] = style
-    existing['SUBTITLE_FONTSIZE'] = str(fontsize)
-    existing['SUBTITLE_FONTCOLOR'] = fontcolor
-    existing['SUBTITLE_POSITION_Y'] = str(position)
-    existing['SUBTITLE_CAPITALIZE'] = '1' if capitalize else '0'
-    existing['SUBTITLE_BORDERW'] = str(borderw)
-    existing['SUBTITLE_BORDERCOLOR'] = bordercolor
-    existing['SUBTITLE_BOX_BORDER'] = str(boxborder)
-    existing['SUBTITLE_BOX_COLOR'] = boxcolor
-    existing['SUBTITLE_SHADOW_X'] = str(shadowx)
-    existing['SUBTITLE_SHADOW_Y'] = str(shadowy)
-    existing['SUBTITLE_SHADOW_COLOR'] = shadowcolor
-    existing['SUBTITLE_WORDS_COUNT'] = str(words_count)
-    existing['SUBTITLE_WORD_FADE'] = '1' if word_fade else '0'
+    for key, val in keys_to_set.items():
+        set_key(str(env_path), key, val)
 
-    if api_provider and api_key:
-        if api_provider == 'groq':
-            existing['GROQ_API_KEY'] = api_key
-        elif api_provider == 'openai':
-            existing['OPENAI_API_KEY'] = api_key
-    
-    # Записываем обновленный .env
-    env_content = f"""GROQ_API_KEY="{existing['GROQ_API_KEY']}"
-OPENAI_API_KEY="{existing.get('OPENAI_API_KEY', '')}"
-
-# Настройки видео
-VIDEO_CROP_MODE="{existing['VIDEO_CROP_MODE']}"
-VIDEO_ZOOM_ENABLE={existing['VIDEO_ZOOM_ENABLE']}
-
-# Настройки субтитров
-SUBTITLE_FONT="{existing['SUBTITLE_FONT']}"
-SUBTITLE_STYLE="{existing['SUBTITLE_STYLE']}"
-SUBTITLE_FONTSIZE={existing['SUBTITLE_FONTSIZE']}
-SUBTITLE_FONTCOLOR="{existing['SUBTITLE_FONTCOLOR']}"
-SUBTITLE_POSITION_Y={existing['SUBTITLE_POSITION_Y']}
-SUBTITLE_CAPITALIZE={existing['SUBTITLE_CAPITALIZE']}
-SUBTITLE_BORDERW={existing['SUBTITLE_BORDERW']}
-SUBTITLE_BORDERCOLOR="{existing['SUBTITLE_BORDERCOLOR']}"
-SUBTITLE_BOX_BORDER={existing['SUBTITLE_BOX_BORDER']}
-SUBTITLE_BOX_COLOR="{existing['SUBTITLE_BOX_COLOR']}"
-SUBTITLE_SHADOW_X={existing['SUBTITLE_SHADOW_X']}
-SUBTITLE_SHADOW_Y={existing['SUBTITLE_SHADOW_Y']}
-SUBTITLE_SHADOW_COLOR="{existing['SUBTITLE_SHADOW_COLOR']}"
-SUBTITLE_WORDS_COUNT={existing['SUBTITLE_WORDS_COUNT']}
-SUBTITLE_WORD_FADE={existing['SUBTITLE_WORD_FADE']}
-"""
-    
-    async with aiofiles.open(env_path, "w", encoding="utf-8") as f:
-        await f.write(env_content)
-    
-    # Перезагружаем переменные окружения
-    from dotenv import load_dotenv
-    load_dotenv(override=True)
-    
-    return {"status": "success", "message": "Настройки сохранены"}
+    # Reload env
+    load_dotenv(str(env_path), override=True)
+    return {"status": "success"}
 
 
-@app.post("/api/integration/start")
-async def start_integration(
-    source: str = Form(...),
-    video_url: str = Form(None),
-    video_file: UploadFile = File(None),
-    accounts: str = Form(...),
-    distribution_mode: str = Form("equal"),
-    custom_distribution: str = Form(""),
-    videos_per_day: int = Form(3),
-    publish_time: str = Form("auto"),
-    short_length: int = Form(45),
-    shorts_count: int = Form(5),
-    enable_scheduled: bool = Form(False),
-    schedule_start_date: str = Form(None),
-    schedule_start_time: str = Form(None),
-    schedule_interval: int = Form(60),
-    blurred_bg: bool = Form(False),
-    crop_fill: bool = Form(False),
-    save_video: bool = Form(False),
-    save_folder: str = Form("saved"),
-    filename_keywords: str = Form("")
-):
-    job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "starting", "progress": 0, "shorts": [], "integration": True, "save_video": save_video, "save_folder": save_folder, "created_at": time.time()}
-    save_jobs()
-    job_logs[job_id] = []
-    
-    add_job_log(job_id, "Запуск интеграции...", "info")
-    
-    # Парсим аккаунты (теперь только email)
-    account_list = []
-    for line in accounts.strip().split('\n'):
-        email = line.strip()
-        if email and '@' in email:
-            account_list.append({"email": email})
-    
-    if not account_list:
-        add_job_log(job_id, "Ошибка: не указаны аккаунты", "error")
-        raise HTTPException(status_code=400, detail="Не указаны аккаунты")
-    
-    add_job_log(job_id, f"Найдено {len(account_list)} аккаунтов", "success")
-    
-    # Сохраняем файл сразу, если это файл
-    video_file_path = None
-    if source == "file" and video_file:
-        safe_filename = f"{job_id}_input.mp4"
-        video_file_path = UPLOAD_DIR / safe_filename
-        async with aiofiles.open(video_file_path, "wb") as f:
-            content = await video_file.read()
-            await f.write(content)
-        video_file_path = str(video_file_path)
-    
-    # Запускаем задачу
-    asyncio.create_task(process_integration(
-        job_id, source, video_url, video_file_path, account_list,
-        distribution_mode, custom_distribution, videos_per_day,
-        publish_time, short_length, shorts_count,
-        enable_scheduled, schedule_start_date, schedule_start_time, schedule_interval,
-        blurred_bg, crop_fill, save_video, save_folder, filename_keywords
-    ))
-    
-    return {"job_id": job_id, "status": "started"}
+# ── Jobs / Integration ──
 
 
-async def process_integration(
-    job_id: str, source: str, video_url: str, video_file_path: str,
-    accounts: list, distribution_mode: str, custom_distribution: str,
-    videos_per_day: int, publish_time: str, short_length: int, shorts_count: int,
-    enable_scheduled: bool = False, schedule_start_date: str = None, 
-    schedule_start_time: str = None, schedule_interval: int = 60,
-    blurred_bg: bool = False, crop_fill: bool = False, save_video: bool = False, save_folder: str = "saved",
-    filename_keywords: str = ""
-):
+# ── YouTube ──
+@app.post("/api/youtube/authorize")
+async def yt_authorize(data: dict):
+    email = data.get("email", "")
+    if not email:
+        return _err("Email required")
+    youtube_api.client_secret_file = get_creds(email)
+    if youtube_api.authenticate(email):
+        return _ok({"message": f"Authorized: {email}"})
+    return _err("Authorization failed")
+
+
+@app.post("/api/youtube/upload-credentials")
+async def yt_upload_creds(email: str = Form(...), credentials: UploadFile = File(...)):
+    content = await credentials.read()
     try:
-        print(f"[INTEGRATION] Starting job: {job_id}")
-        add_job_log(job_id, "Начало обработки видео", "info")
-        
-        # 1. Получаем видео
-        if source == "url":
-            add_job_log(job_id, f"Загрузка видео с URL: {video_url}", "progress")
-            video_path = await processor.download_video(video_url, job_id)
-            add_job_log(job_id, "Видео загружено", "success")
-        else:
-            video_path = video_file_path
-            add_job_log(job_id, "Использование локального файла", "info")
-        
-        jobs[job_id]["status"] = "processing"
-        jobs[job_id]["progress"] = 20
-        save_jobs()
-        
-        # 2. Создаём шорты
-        add_job_log(job_id, "Получение информации о видео", "progress")
-        video_info = await processor.get_video_info(video_path)
-        add_job_log(job_id, f"Длительность видео: {video_info.get('duration', 0):.1f} сек", "info")
-        
-        add_job_log(job_id, f"Извлечение {shorts_count} сегментов по {short_length} сек", "progress")
-        segments = await processor.extract_segments(video_path, short_length, shorts_count)
-        add_job_log(job_id, f"Найдено {len(segments)} сегментов", "success")
-        
-        shorts = []
-        for i, segment in enumerate(segments):
-            add_job_log(job_id, f"[{i+1}/{len(segments)}] Обработка сегмента {segment['start']:.1f}s - {segment['end']:.1f}s", "progress")
-            
-            # Получаем субтитры
-            subtitle_data = await processor.get_subtitles(video_path, segment["start"], segment["end"])
-            add_job_log(job_id, f"[{i+1}/{len(segments)}] Субтитры: {len(subtitle_data.get('segments', []))} фраз", "info")
-            
-            # Создаём видео с субтитрами
-            short_path = await processor.create_short(video_path, segment, i, job_id, subtitle_data.get("segments"), blurred_bg, filename_keywords, crop_fill)
-            
-            if not short_path or not Path(short_path).exists():
-                add_job_log(job_id, f"[{i+1}/{len(segments)}] Видео не создано", "warning")
-                continue
-            
-            add_job_log(job_id, f"[{i+1}/{len(segments)}] Видео создано", "success")
-            
-            # Генерируем метаданные (без субтитров)
-            try:
-                add_job_log(job_id, f"[{i+1}/{len(segments)}] Генерация метаданных через AI", "progress")
-                metadata = await ai_service.generate_metadata(f"Video segment {i+1}", i + 1, video_info)
-                add_job_log(job_id, f"[{i+1}/{len(segments)}] Метаданные: {metadata['title'][:50]}...", "info")
-            except Exception as e:
-                add_job_log(job_id, f"[{i+1}/{len(segments)}] AI ошибка: {str(e)}", "warning")
-                metadata = {
-                    "title": f"#shorts #{i+1}",
-                    "description": "Video short",
-                    "tags": ["#shorts", "#viral", "#trending"]
-                }
-            
-            shorts.append({
-                "path": short_path,
-                "title": metadata["title"],
-                "description": metadata["description"],
-                "tags": metadata["tags"]
-            })
-            
-            if jobs[job_id].get("save_video"):
-                folder_name = jobs[job_id].get("save_folder", "saved") or "saved"
-                saved_dir = BASE_DIR / "saved" / folder_name
-                saved_dir.mkdir(parents=True, exist_ok=True)
-                import shutil
-                filename = f"short_{job_id}_{i}.mp4"
-                dest = saved_dir / filename
-                shutil.copy2(short_path, dest)
-                add_job_log(job_id, f"[{i+1}/{len(segments)}] Сохранено в {folder_name}", "success")
-            
-            jobs[job_id]["progress"] = 20 + (i + 1) * 40 // len(segments)
-            save_jobs()
-        
-        # 3. Распределяем видео по аккаунтам
-        if distribution_mode == "equal":
-            videos_per_account = [len(shorts) // len(accounts)] * len(accounts)
-            for i in range(len(shorts) % len(accounts)):
-                videos_per_account[i] += 1
-        else:
-            videos_per_account = [int(x) for x in custom_distribution.split(',')]
-        
-        add_job_log(job_id, f"Распределение: {videos_per_account}", "info")
-        
-        jobs[job_id]["status"] = "uploading"
-        jobs[job_id]["progress"] = 60
-        save_jobs()
-        
-        # 4. Загружаем на YouTube через API
-        add_job_log(job_id, "Начало загрузки на YouTube", "info")
-        video_index = 0
-        
-        for acc_idx, account in enumerate(accounts):
-            if video_index >= len(shorts):
-                break
-            
-            email = account["email"]
-            add_job_log(job_id, f"Авторизация аккаунта: {email}", "progress")
-            
-            # Авторизация через API
-            youtube_api.client_secret_file = str(get_account_credentials_file(email))
-            if not youtube_api.authenticate(email):
-                add_job_log(job_id, f"✗ Ошибка авторизации: {email}", "error")
-                continue
-            
-            add_job_log(job_id, f"✓ Авторизован: {email}", "success")
-            
-            # Загружаем видео
-            videos_to_upload = min(videos_per_account[acc_idx], len(shorts) - video_index)
-            add_job_log(job_id, f"Загрузка {videos_to_upload} видео на {email}", "info")
-            
-            for i in range(videos_to_upload):
-                short = shorts[video_index]
-                
-                add_job_log(job_id, f"[{video_index+1}/{len(shorts)}] Загрузка: {short['title'][:50]}...", "progress")
-                
-                # Определяем статус публикации и время
-                privacy_status = "public"
-                publish_at = None
-                
-                if enable_scheduled and schedule_start_date and schedule_start_time:
-                    from datetime import datetime, timedelta
-                    
-                    # Парсим дату и время
-                    start_datetime = datetime.fromisoformat(f"{schedule_start_date}T{schedule_start_time}")
-                    
-                    # Добавляем интервал для каждого видео
-                    publish_datetime = start_datetime + timedelta(minutes=schedule_interval * video_index)
-                    
-                    # Если время в будущем - делаем private с отложенной публикацией
-                    if publish_datetime > datetime.now():
-                        privacy_status = "private"
-                        publish_at = publish_datetime
-                        add_job_log(job_id, f"[{video_index+1}/{len(shorts)}] Отложенная публикация: {publish_datetime.strftime('%Y-%m-%d %H:%M')}", "info")
-                
-                # Загружаем через API
-                video_id = youtube_api.upload_video(
-                    short["path"],
-                    short["title"],
-                    short["description"],
-                    short["tags"],
-                    category_id="22",
-                    privacy_status=privacy_status,
-                    publish_at=publish_at
-                )
-                
-                if video_id:
-                    add_job_log(job_id, f"✓ [{video_index+1}/{len(shorts)}] Загружено: https://youtube.com/watch?v={video_id}", "success")
-                else:
-                    add_job_log(job_id, f"✗ [{video_index+1}/{len(shorts)}] Ошибка загрузки", "error")
-                
-                video_index += 1
-                jobs[job_id]["progress"] = 60 + (video_index * 40 // len(shorts))
-        
-        jobs[job_id]["status"] = "completed"
-        jobs[job_id]["progress"] = 100
-        jobs[job_id]["finished_at"] = time.time()
-        save_jobs()
-        add_job_log(job_id, f"Интеграция завершена! Загружено {video_index}/{len(shorts)} видео", "success")
-        print(f"[INTEGRATION] Job completed: {job_id}")
-        
-    except Exception as e:
-        error_msg = f"Критическая ошибка: {str(e)}"
-        print(f"[INTEGRATION] Error: {error_msg}")
-        add_job_log(job_id, error_msg, "error")
-        import traceback
-        traceback.print_exc()
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = str(e)
-        jobs[job_id]["finished_at"] = time.time()
-        save_jobs()
+        json.loads(content)
+    except:
+        return _err("Invalid JSON")
+    d = BASE_DIR / "google_credentials"
+    d.mkdir(exist_ok=True)
+    with open(d / f"{safe_email(email)}.json", 'wb') as f:
+        f.write(content)
+    return _ok({"message": f"Credentials saved for {email}"})
 
 
-@app.post("/api/upload-url")
-async def upload_url(url: str = Form(...), short_length: int = Form(45), shorts_count: int = Form(5), smart_selection: bool = Form(False), blurred_bg: bool = Form(False), crop_fill: bool = Form(False), save_video: bool = Form(False), save_folder: str = Form("saved"), filename_keywords: str = Form("")):
-    job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "downloading", "progress": 0, "shorts": [], "save_video": save_video, "save_folder": save_folder, "created_at": time.time()}
+@app.get("/api/youtube/accounts")
+async def yt_accounts():
+    accounts = []
+    d = BASE_DIR / "google_credentials"
+    if d.exists():
+        for f in d.glob("*.json"):
+            email = f.stem.replace('_at_', '@').replace('_', '.')
+            accounts.append({"email": email, "has_token": youtube_api.get_token_file(email).exists()})
+    return _ok({"accounts": accounts})
+
+
+@app.delete("/api/youtube/accounts")
+async def yt_delete(data: dict):
+    email = data.get("email", "").strip()
+    if not email:
+        return _err("Email required")
+    s = safe_email(email)
+    deleted = []
+    for p in [BASE_DIR / "google_credentials" / f"{s}.json", youtube_api.get_token_file(email)]:
+        if p.exists() and p.is_file():
+            p.unlink()
+            deleted.append(str(p))
+    return _ok({"message": f"Deleted: {email}", "deleted": deleted})
+
+
+@app.post("/api/cleanup")
+async def cleanup():
+    c = 0
+    now = time.time()
+    for jid, j in list(jobs.items()):
+        if j.get("status") in ("completed", "failed") or (j.get("finished_at") and now - j["finished_at"] > 3600):
+            for s in j.get("shorts", []):
+                p = s.get("filepath")
+                if p and Path(p).exists():
+                    try:
+                        Path(p).unlink()
+                        c += 1
+                    except:
+                        pass
+            inp = UPLOAD_DIR / f"{jid}_input.mp4"
+            if inp.exists():
+                try:
+                    inp.unlink()
+                    c += 1
+                except:
+                    pass
+            del jobs[jid]
     save_jobs()
-    
-    asyncio.create_task(process_video(job_id, url, short_length, shorts_count, smart_selection, blurred_bg, filename_keywords, crop_fill))
-    
-    return {"job_id": job_id, "status": "started"}
+    return {"deleted": c}
 
 
-@app.post("/api/upload-file")
-async def upload_file(file: UploadFile = File(...), short_length: int = Form(45), shorts_count: int = Form(5), smart_selection: bool = Form(False), blurred_bg: bool = Form(False), crop_fill: bool = Form(False), save_video: bool = Form(False), save_folder: str = Form("saved"), filename_keywords: str = Form("")):
-    job_id = str(uuid.uuid4())
-    
-    print(f"[UPLOAD] Starting upload for job: {job_id}, file: {file.filename}")
-    
-    try:
-        safe_filename = f"{job_id}_input.mp4"
-        file_path = UPLOAD_DIR / safe_filename
-        async with aiofiles.open(file_path, "wb") as f:
-            content = await file.read()
-            await f.write(content)
-        
-        print(f"[UPLOAD] File saved: {file_path}, size: {len(content)} bytes")
-        
-        jobs[job_id] = {"status": "processing", "progress": 0, "shorts": [], "save_video": save_video, "save_folder": save_folder, "created_at": time.time()}
-        save_jobs()
-        
-        asyncio.create_task(process_video(job_id, str(file_path), short_length, shorts_count, smart_selection, blurred_bg, filename_keywords, crop_fill))
-        
-        return {"job_id": job_id, "status": "started"}
-    except Exception as e:
-        print(f"[UPLOAD] Error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+@app.get("/api/logs/{job_id}")
+async def get_logs(job_id: str):
+    logs = job_logs.get(job_id, [])
+    return {"logs": logs, "status": jobs.get(job_id, {}).get("status", "unknown"), "progress": jobs.get(job_id, {}).get("progress", 0)}
+
+
+@app.get("/api/jobs")
+async def list_jobs_api():
+    return {"jobs": [{"id": jid, "status": j.get("status"), "progress": j.get("progress", 0), "shorts_count": len(j.get("shorts", [])), "created_at": j.get("created_at")} for jid, j in jobs.items()]}
 
 
 @app.get("/api/status/{job_id}")
 async def get_status(job_id: str):
-    job = jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    j = jobs.get(job_id)
+    if not j:
+        return _err("Not found", 404)
+    shorts = j.get("shorts", [])
+    return {
+        "status": j.get("status", "unknown"),
+        "progress": j.get("progress", 0),
+        "error": j.get("error", ""),
+        "shorts": [{
+            "id": s.get("index", i),
+            "title": s.get("title", f"#shorts #{s.get('index', i)+1}"),
+            "description": s.get("description", ""),
+            "tags": s.get("tags", ["#shorts"]),
+            "filename": s.get("filename", ""),
+            "filepath": s.get("filepath", ""),
+        } for i, s in enumerate(shorts)]
+    }
 
 
-@app.delete("/api/jobs/old")
-async def delete_old_jobs(days_old: int = 7):
-    """Delete jobs older than N days and their files"""
-    global jobs
-    now = time.time()
-    cutoff = now - days_old * 86400
-    deleted = 0
-    for job_id, job in list(jobs.items()):
-        finished = job.get("finished_at") or job.get("created_at", 0)
-        if finished < cutoff and job.get("status") in ("completed", "failed"):
-            job_output_dir = OUTPUT_DIR / job_id
-            if job_output_dir.exists():
-                shutil.rmtree(job_output_dir)
-            for f in OUTPUT_DIR.glob(f"short_{job_id}_*.mp4"):
-                try: f.unlink()
-                except: pass
-            upload_file_path = UPLOAD_DIR / f"{job_id}_input.mp4"
-            if upload_file_path.exists():
-                try: upload_file_path.unlink()
-                except: pass
-            del jobs[job_id]
-            deleted += 1
-    save_jobs()
-    return {"status": "success", "deleted": deleted}
+@app.get("/api/jobs/{job_id}")
+async def get_job_api(job_id: str):
+    j = jobs.get(job_id)
+    if not j:
+        return _err("Not found", 404)
+    shorts = j.get("shorts", [])
+    return {
+        "id": job_id, "status": j.get("status"), "progress": j.get("progress", 0),
+        "shorts": [{
+            "id": s.get("index", i),
+            "title": s.get("title", f"#shorts #{s.get('index', i)+1}"),
+            "description": s.get("description", ""),
+            "tags": s.get("tags", ["#shorts"]),
+            "filename": s.get("filename", ""),
+            "filepath": s.get("filepath", ""),
+            "youtube_url": s.get("youtube_url", ""),
+        } for i, s in enumerate(shorts)]
+    }
 
 
-@app.delete("/api/jobs/{job_id}")
-async def delete_job(job_id: str):
-    """Delete job and its output files"""
-    global jobs
-    if job_id in jobs:
-        del jobs[job_id]
-    job_output_dir = OUTPUT_DIR / job_id
-    if job_output_dir.exists():
-        shutil.rmtree(job_output_dir)
-    for f in OUTPUT_DIR.glob(f"short_{job_id}_*.mp4"):
-        f.unlink()
-    upload_file_path = UPLOAD_DIR / f"{job_id}_input.mp4"
-    if upload_file_path.exists():
-        upload_file_path.unlink()
-    return {"status": "success", "job_id": job_id}
-
-
-@app.get("/api/projects")
-async def get_projects():
-    """Get list of all jobs/projects"""
-    projects = []
-    for job_id, job in jobs.items():
-        shorts_count = len(job.get("shorts", []))
-        projects.append({
-            "job_id": job_id,
-            "status": job.get("status", "unknown"),
-            "progress": job.get("progress", 0),
-            "shorts_count": shorts_count,
-            "created_at": job.get("created_at", time.time()),
-            "save_folder": job.get("save_folder", ""),
-            "integration": job.get("integration", False)
-        })
-    projects.sort(key=lambda x: x.get("created_at", 0), reverse=True)
-    return {"status": "success", "projects": projects}
-    """Clean up jobs older than N days"""
-    from datetime import datetime, timedelta
-    cutoff = time.time() - (days_old * 86400)
-    to_delete = []
-    for job_id in list(jobs.keys()):
-        job = jobs.get(job_id, {})
-        if job.get("created_at", 0) < cutoff or (job.get("status") in ("completed", "failed") and job.get("finished_at", 0) < cutoff):
-            to_delete.append(job_id)
-    for job_id in to_delete:
-        del jobs[job_id]
-        for f in OUTPUT_DIR.glob(f"short_{job_id}_*.mp4"):
-            f.unlink()
-        (UPLOAD_DIR / f"{job_id}_input.mp4").unlink(missing_ok=True)
-    return {"status": "success", "deleted": len(to_delete)}
-
-
-@app.get("/api/download/{short_id}")
-async def download_short(short_id: str):
-    print(f"[DOWNLOAD] Requested short_id: {short_id}")
-    
-    # Сначала ищем по filepath из jobs
-    for job in jobs.values():
-        for short in job.get("shorts", []):
-            if short.get("id") == short_id:
-                fp = short.get("filepath") or short.get("path", "")
-                if fp and Path(fp).exists():
-                    return FileResponse(
-                        path=str(fp),
-                        filename=short.get("filename", f"{short_id}.mp4"),
-                        media_type="video/mp4"
-                    )
-    
-    # Fallback: ищем в OUTPUT_DIR
-    if not short_id.startswith('short_'):
-        short_id = f"short_{short_id}"
-    
-    filename = f"{short_id}.mp4"
-    file_path = OUTPUT_DIR / filename
-    
-    print(f"[DOWNLOAD] Looking for: {file_path}")
-    print(f"[DOWNLOAD] Exists: {file_path.exists()}")
-    
-    if file_path.exists():
-        return FileResponse(
-            path=str(file_path),
-            filename=filename,
-            media_type="video/mp4"
-        )
-    
-    print(f"[DOWNLOAD] File not found: {file_path}")
-    raise HTTPException(status_code=404, detail="File not found")
+@app.get("/api/download/{short_idx}")
+async def download_short(short_idx: int, job_id: str = None):
+    # Try to find the short in any job
+    for jid, j in jobs.items():
+        for s in j.get("shorts", []):
+            if s.get("index") == short_idx or s.get("filepath", "").endswith(f"short_{jid}_{short_idx}.mp4"):
+                fp = Path(s["filepath"])
+                if fp.exists():
+                    return FileResponse(str(fp), media_type="video/mp4", filename=s.get("filename", fp.name))
+    # Fallback: search by index pattern
+    for jid, j in jobs.items():
+        for s in j.get("shorts", []):
+            if s.get("index") == short_idx:
+                fp = Path(s["filepath"])
+                if fp.exists():
+                    return FileResponse(str(fp), media_type="video/mp4", filename=s.get("filename", fp.name))
+    return _err("Not found", 404)
 
 
 @app.get("/api/download-zip/{job_id}")
-async def download_zip(job_id: str):
-    import zipfile
-    import shutil
-    
-    print(f"[ZIP] Creating zip for job: {job_id}")
-    
-    job = jobs.get(job_id)
-    if not job or not job.get("shorts"):
-        raise HTTPException(status_code=404, detail="No videos found")
-    
-    descriptions = []
-    added_count = 0
-    missing_count = 0
-    
-    zip_path = OUTPUT_DIR / f"shorts_{job_id}.zip"
-    
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED) as zip_file:
-        for idx, short in enumerate(job["shorts"], 1):
-            filepath = short.get("filepath") or short.get("path", "")
-            num_filename = f"{idx:02d}_video.mp4"
-            if Path(filepath).exists():
-                zip_file.write(filepath, num_filename)
-                added_count += 1
-                print(f"[ZIP] Added: {num_filename}")
-            else:
-                missing_count += 1
-                print(f"[ZIP] WARNING: File not found: {filepath}")
-            
-            title = short.get("title", "")
-            description = short.get("description", "")
-            tags = ", ".join(short.get("tags", []))
-            descriptions.append(f"--- #{idx} ---\nФайл: {num_filename}\nЗаголовок: {title}\nОписание: {description}\nТеги: {tags}\n")
-        
-        if descriptions:
-            zip_file.writestr("descriptions.txt", "\n".join(descriptions))
-            print("[ZIP] Added: descriptions.txt")
-    
-    if missing_count > 0:
-        print(f"[ZIP] WARNING: {missing_count} file(s) missing, added only {added_count}/{len(job['shorts'])}")
-    
-    if added_count == 0:
-        if zip_path.exists():
-            zip_path.unlink()
-        raise HTTPException(status_code=404, detail=f"No video files found on disk ({missing_count} referenced files missing)")
-    
-    from fastapi.responses import StreamingResponse
-    
-    def iterfile():
-        with open(zip_path, 'rb') as f:
+async def download_job_zip(job_id: str):
+    import tempfile, zipfile
+    j = jobs.get(job_id)
+    if not j:
+        return _err("Job not found", 404)
+    shorts = j.get("shorts", [])
+    if not shorts:
+        return _err("No shorts", 404)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+        for s in shorts:
+            fp = Path(s.get("filepath", ""))
+            if fp.exists():
+                zf.write(str(fp), arcname=s.get("filename", fp.name))
+    tmp.close()
+
+    async def stream_file():
+        with open(tmp.name, "rb") as f:
             while True:
                 chunk = f.read(65536)
-                if not chunk:
-                    break
+                if not chunk: break
                 yield chunk
-    
-    return StreamingResponse(
-        iterfile(),
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=shorts_{job_id}.zip"}
-    )
+        os.unlink(tmp.name)
+
+    return StreamingResponse(stream_file(), media_type="application/zip",
+                              headers={"Content-Disposition": f'attachment; filename="shorts_{job_id}.zip"'})
 
 
-@app.post("/api/update-short/{short_id}")
-async def update_short(short_id: str, title: str = Form(...), description: str = Form(...), tags: str = Form(...)):
-    for job in jobs.values():
-        for short in job.get("shorts", []):
-            if short["id"] == short_id:
-                short["title"] = title
-                short["description"] = description
-                short["tags"] = [t.strip() for t in tags.split(",")]
-                return {"status": "updated"}
-    raise HTTPException(status_code=404, detail="Short not found")
+# ── Admin ──
+@app.get("/api/admin/analytics")
+async def analytics():
+    from datetime import datetime, timedelta
+    today = datetime.now()
+    dates = [(today - timedelta(days=i)).strftime("%d.%m") for i in range(6, -1, -1)]
+    accounts = []
+    tv = ts = tvc = 0
+    for tf in Path(youtube_api.tokens_dir).glob("token_*.pickle"):
+        email = tf.stem.replace('token_', '').replace('_', '@', 1).replace('_at_', '@')
+        try:
+            if youtube_api.authenticate(email):
+                info = youtube_api.get_channel_info()
+                if info:
+                    s = info.get("statistics", {})
+                    subs = int(s.get("subscriberCount", 0))
+                    views = int(s.get("viewCount", 0))
+                    vids = int(s.get("videoCount", 0))
+                    tv += views; ts += subs; tvc += vids
+                    accounts.append({"email": email, "videos_count": vids, "views": views, "subscribers": subs, "status": "active"})
+                else:
+                    accounts.append({"email": email, "status": "inactive"})
+        except:
+            accounts.append({"email": email, "status": "inactive"})
+    if not accounts:
+        for jid, j in jobs.items():
+            if j.get("status") == "completed":
+                tvc += len(j.get("shorts", []))
+    return {"total_videos": tvc, "total_views": tv, "total_subscribers": ts, "accounts": accounts, "videos": []}
 
 
-async def process_video(job_id: str, source: str, short_length: int, shorts_count: int, smart_selection: bool = False, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False):
+@app.post("/api/admin/analyze")
+async def analyze(data: dict):
+    import re
+    url = data.get("url", "").strip()
+    if not url:
+        return _err("URL required")
+    client = None
+    if YOUTUBE_API_KEY:
+        from googleapiclient.discovery import build
+        client = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+    if not client:
+        return _err("No API key")
+    m = re.search(r'(?:youtube\.com|youtu\.be)/channel/([a-zA-Z0-9_-]{10,})', url)
+    channel_id = m.group(1) if m else None
+    if not channel_id:
+        m = re.search(r'(?:youtube\.com|youtu\.be)/@([a-zA-Z0-9_-]+)', url)
+        if m:
+            resp = client.search().list(part='snippet', q=m.group(1), type='channel', maxResults=1).execute()
+            channel_id = resp['items'][0]['snippet']['channelId'] if resp.get('items') else None
+    if not channel_id:
+        return _err("Channel not found")
     try:
-        add_job_log(job_id, f"Старт задачи: {job_id}", "info")
-        add_job_log(job_id, f"Источник: {source}", "info")
-        
-        if source.startswith("http"):
-            jobs[job_id]["status"] = "downloading"
-            jobs[job_id]["progress"] = 10
-            save_jobs()
-            
-            try:
-                video_path = await processor.download_video(source, job_id)
-                add_job_log(job_id, f"Видео загружено: {video_path}", "success")
-                print(f"[PROCESS] Video: {Path(video_path).name} — {source}")
-                
-                if not video_path or not Path(video_path).exists():
-                    raise Exception("Видео не скачано")
-            except Exception as e:
-                add_job_log(job_id, f"Ошибка загрузки видео: {str(e)}", "error")
-                jobs[job_id]["status"] = "failed"
-                jobs[job_id]["error"] = str(e)
-                jobs[job_id]["finished_at"] = time.time()
-                save_jobs()
-                return
-        else:
-            video_path = source
-            add_job_log(job_id, f"Локальное видео: {video_path}", "info")
-            print(f"[PROCESS] Video: {Path(video_path).name}")
-            jobs[job_id]["status"] = "processing"
-            jobs[job_id]["progress"] = 10
-        
-        jobs[job_id]["status"] = "processing"
-        jobs[job_id]["progress"] = 30
-        save_jobs()
-        
-        video_info = await processor.get_video_info(video_path)
-        add_job_log(job_id, f"Видео: {video_info['duration']:.0f}с", "info")
-        
-        # Smart selection
-        subtitle_segments_all = None
-        segments = []
-        
-        if smart_selection:
-            add_job_log(job_id, "Смарт-отбор: поиск лучших фрагментов...", "progress")
-            try:
-                duration = video_info["duration"]
-                
-                parts = max(min(shorts_count, 200), 20)
-                part_len = duration / parts
-                max_analyze = min(part_len * 0.5, 1200)
-                add_job_log(job_id, f"{parts} частей x {max_analyze:.0f}с анализ (tiny)", "info")
-                
-                all_segments = []
-                scan_semaphore = asyncio.Semaphore(1)
-                
-                async def analyze_part(p: int) -> dict:
-                    async with scan_semaphore:
-                        try:
-                            p_start = p * part_len
-                            analyze_end = min(p_start + max_analyze, duration)
-                            add_job_log(job_id, f"Часть {p+1}/{parts}: {p_start:.0f}с-{analyze_end:.0f}с", "info")
-                            print(f"[SMART] Part {p+1}/{parts}: {p_start:.0f}s-{analyze_end:.0f}s")
-                            part_sub = await processor.get_subtitles(video_path, p_start, analyze_end, model_size="base", word_timestamps=False)
-                            part_segs = part_sub.get("segments", [])
-                            
-                            for s in part_segs:
-                                all_segments.append({
-                                    "start": s["start"] + p_start,
-                                    "end": s["end"] + p_start,
-                                    "text": s["text"]
-                                })
-                            
-                            if part_segs:
-                                best = processor._find_best_segments(max_analyze, short_length, 1, part_segs)
-                                if best:
-                                    best[0]["start"] += p_start
-                                    best[0]["end"] += p_start
-                                    add_job_log(job_id, f"Часть {p+1}: лучший {best[0]['start']:.0f}с", "success")
-                                    print(f"[SMART] Part {p+1}: best at {best[0]['start']:.0f}s")
-                                    return best[0]
-                            mid = p_start + part_len / 2
-                            return {"start": mid - short_length/2, "end": mid + short_length/2}
-                        except Exception as e:
-                            add_job_log(job_id, f"Часть {p+1}: ошибка {e}", "error")
-                            mid = p_start + part_len / 2
-                            return {"start": mid - short_length/2, "end": mid + short_length/2}
-                
-                results = await asyncio.gather(*[analyze_part(p) for p in range(parts)], return_exceptions=True)
-                results = [r for r in results if isinstance(r, dict)]
-                subtitle_segments_all = all_segments
-                
-                # Если нужно больше шортсов, ищем дополнительные среди всех сегментов
-                if len(results) < shorts_count and all_segments:
-                    need = shorts_count - len(results)
-                    more = processor._find_best_segments(duration, short_length, need, all_segments, video_path)
-                    for m in more:
-                        overlap = any(m["start"] < r["end"] and m["end"] > r["start"] for r in results if r)
-                        if not overlap:
-                            results.append(m)
-                        if len(results) >= shorts_count:
-                            break
-                
-                segments = [r for r in results if r][:shorts_count]
-                    
-                add_job_log(job_id, f"Найдено {len(segments)} фрагментов", "success")
-                
-            except Exception as e:
-                add_job_log(job_id, f"Ошибка смарт-отбора: {e}", "error")
-        
-        if not segments:
-            add_job_log(job_id, "Обычное деление на сегменты", "info")
-            segments = await processor.extract_segments(video_path, short_length, shorts_count, None, False)
-        
-        if not segments:
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = "Не удалось найти сегменты для нарезки"
-            jobs[job_id]["finished_at"] = time.time()
-            add_job_log(job_id, "Не удалось найти сегменты", "error")
-            save_jobs()
-            return
-        
-        jobs[job_id]["progress"] = 60
-        save_jobs()
-
-        completed_shorts = []
-        total = len(segments)
-        print(f"[RENDER] creating {len(segments)} shorts (shorts_count={shorts_count})")
-        
-        async def process_segment(i, segment):
-            add_job_log(job_id, f"Шортс {i+1}/{total}: {segment['start']:.0f}с - {segment['end']:.0f}с", "progress")
-            print(f"[RENDER] Short {i+1}/{total}: {segment['start']:.0f}s-{segment['end']:.0f}s")
-            
-            # Транскрипция
-            add_job_log(job_id, f"[{i+1}] Транскрипция...", "info")
-            sub_data = await processor.get_subtitles(video_path, segment["start"], segment["end"])
-            add_job_log(job_id, f"[{i+1}] Субтитры: {len(sub_data.get('segments', []))} фраз", "info")
-            
-            # Рендер
-            add_job_log(job_id, f"[{i+1}] Рендер...", "progress")
-            short_path = await processor.create_short(video_path, segment, i, job_id, sub_data.get("segments"), blurred_bg, filename_keywords, crop_fill)
-            
-            if not short_path or not Path(short_path).exists():
-                add_job_log(job_id, f"[{i+1}] Видео не создано", "warning")
-                return None
-            
-            add_job_log(job_id, f"[{i+1}] Видео создано", "success")
-            
-            # Метаданные (Groq)
-            try:
-                transcript_text = sub_data.get("text", "")[:500]
-                metadata = await ai_service.generate_metadata(transcript_text, i + 1, video_info)
-            except Exception:
-                metadata = ai_service._default_metadata(i + 1)
-            
-            short_id = f"{job_id}_{i}"
-            filename = f"short_{job_id}_{i}.mp4"
-            
-            result = {
-                "id": short_id,
-                "filename": filename,
-                "filepath": short_path,
-                "title": metadata.get("title", ""),
-                "description": metadata.get("description", ""),
-                "tags": metadata.get("tags", [])
-            }
-            
-            # Сохранение
-            if jobs[job_id].get("save_video"):
-                folder_name = jobs[job_id].get("save_folder", "saved") or "saved"
-                saved_dir = BASE_DIR / "saved" / folder_name
-                saved_dir.mkdir(parents=True, exist_ok=True)
-                import shutil
-                shutil.copy2(short_path, saved_dir / filename)
-                add_job_log(job_id, f"[{i+1}] Сохранено в {saved_dir / filename}", "info")
-            
-            return result
-        
-        # Запускаем с ограничением конкуренции (макс 3 одновременно)
-        segment_sem = asyncio.Semaphore(3)
-        
-        async def process_segment_wrapper(i, segment):
-            async with segment_sem:
-                try:
-                    return await process_segment(i, segment)
-                except Exception as e:
-                    add_job_log(job_id, f"[{i+1}] Ошибка: {str(e)}", "error")
-                    print(f"[RENDER] Error in segment {i}: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    return None
-        
-        tasks = [process_segment_wrapper(i, seg) for i, seg in enumerate(segments)]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Собираем результаты (фильтруем исключения)
-        for r in results:
-            if isinstance(r, dict):
-                completed_shorts.append(r)
-                jobs[job_id]["shorts"].append(r)
-                jobs[job_id]["progress"] = 60 + len(completed_shorts) * 30 // total
-                save_jobs()
-        
-        jobs[job_id]["status"] = "completed"
-        jobs[job_id]["progress"] = 100
-        jobs[job_id]["finished_at"] = time.time()
-        save_jobs()
-        add_job_log(job_id, "Готово!", "success")
-        
-    except Exception as e:
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = str(e)
-        jobs[job_id]["finished_at"] = time.time()
-        save_jobs()
-        add_job_log(job_id, f"Ошибка: {str(e)}", "error")
+        chan = client.channels().list(part='snippet,statistics', id=channel_id).execute()['items'][0]
+    except:
+        return _err("Channel fetch failed")
+    sn = chan.get('snippet', {})
+    st = chan.get('statistics', {})
+    videos = []
+    try:
+        sr = client.search().list(part='id', channelId=channel_id, type='video', maxResults=20, order='date').execute()
+        vids = [i['id']['videoId'] for i in sr.get('items', [])]
+        if vids:
+            vr = client.videos().list(part='snippet,statistics', id=','.join(vids)).execute()
+            for item in vr.get('items', []):
+                vs = item.get('statistics', {})
+                videos.append({"id": item['id'], "title": item.get('snippet', {}).get('title', ''), "views": int(vs.get('viewCount', 0)), "likes": int(vs.get('likeCount', 0)), "url": f"https://youtube.com/watch?v={item['id']}"})
+    except:
+        pass
+    return {"channel": {"title": sn.get('title', ''), "subscribers": int(st.get('subscriberCount', 0)), "views": int(st.get('viewCount', 0))}, "videos": videos}
 
 
-@app.delete("/api/cleanup/uploads")
-async def cleanup_uploads():
-    count = 0
-    for f in UPLOAD_DIR.glob("*.mp4"):
-        f.unlink()
-        count += 1
-    return {"status": "success", "deleted": count}
-
-
-@app.delete("/api/cleanup/output")
-async def cleanup_output():
-    count = 0
-    for f in OUTPUT_DIR.glob("*.mp4"):
-        f.unlink()
-        count += 1
-    return {"status": "success", "deleted": count}
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)
-
+# ── Missing frontend routes ──
 
 SAVED_DIR = BASE_DIR / "saved"
 
 
+@app.get("/api/stats")
+async def get_stats():
+    total_jobs = len(jobs)
+    completed = sum(1 for j in jobs.values() if j.get("status") == "completed")
+    failed = sum(1 for j in jobs.values() if j.get("status") == "failed")
+    running = sum(1 for j in jobs.values() if j.get("status") in ("processing", "uploading", "starting"))
+    total_shorts = sum(len(j.get("shorts", [])) for j in jobs.values())
+    return {
+        "total_videos": len([f for f in UPLOAD_DIR.glob("*.mp4") if f.is_file()]),
+        "total_shorts": total_shorts,
+        "completed": completed, "failed": failed,
+        "running": running, "total_jobs": total_jobs
+    }
+
+
+@app.delete("/api/cleanup/uploads")
+async def cleanup_uploads():
+    deleted = 0
+    for f in UPLOAD_DIR.glob("*"):
+        if f.is_file() and f.suffix in (".mp4", ".mkv", ".avi", ".mov", ".wav"):
+            try:
+                f.unlink(); deleted += 1
+            except: pass
+    return {"status": "success", "deleted": deleted}
+
+
+@app.delete("/api/cleanup/output")
+async def cleanup_output():
+    deleted = 0
+    for f in OUTPUT_DIR.rglob("*.mp4"):
+        try:
+            f.unlink(); deleted += 1
+        except: pass
+    return {"status": "success", "deleted": deleted}
+
+
 @app.get("/api/saved-folders")
-async def get_saved_folders():
-    folders = []
-    if SAVED_DIR.exists():
-        for item in sorted(SAVED_DIR.iterdir()):
-            if item.is_dir():
-                folders.append(item.name)
+async def list_saved_folders():
+    SAVED_DIR.mkdir(exist_ok=True)
+    folders = [d.name for d in SAVED_DIR.iterdir() if d.is_dir()]
     return {"status": "success", "folders": folders}
 
 
 @app.post("/api/saved-folders")
-async def create_saved_folder(request: Request):
-    data = await request.json()
-    folder = (data.get("folder") or "").strip()
-    if not folder:
-        return {"status": "error", "message": "Folder name required"}
-    folder_path = SAVED_DIR / folder
-    folder_path.mkdir(parents=True, exist_ok=True)
-    return {"status": "success", "folder": folder}
+async def create_saved_folder(data: dict):
+    name = data.get("folder", "").strip()
+    if not name:
+        return _err("Folder name required")
+    (SAVED_DIR / name).mkdir(parents=True, exist_ok=True)
+    return {"status": "success"}
 
 
 @app.delete("/api/saved-folders")
-async def delete_saved_folder(request: Request):
+async def delete_saved_folder(data: dict):
+    name = data.get("folder", "").strip()
+    if not name:
+        return _err("Folder name required")
+    folder = SAVED_DIR / name
+    if folder.exists():
+        import shutil
+        shutil.rmtree(folder)
+    return {"status": "success"}
+
+
+@app.get("/api/projects")
+async def list_projects():
+    items = []
+    for jid, j in jobs.items():
+        items.append({
+            "id": jid, "status": j.get("status"), "progress": j.get("progress", 0),
+            "shorts_count": len(j.get("shorts", [])),
+            "created_at": j.get("created_at", "")
+        })
+    items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return {"projects": items}
+
+
+@app.delete("/api/jobs/old")
+async def delete_old_jobs(days_old: int = 7):
+    import time
+    now = time.time()
+    threshold = now - days_old * 86400
+    deleted = 0
+    import copy
+    for jid in list(jobs.keys()):
+        j = jobs[jid]
+        created = j.get("created_at", 0)
+        if isinstance(created, str):
+            try:
+                from datetime import datetime
+                created = datetime.strptime(created, "%Y-%m-%d %H:%M:%S").timestamp()
+            except:
+                created = 0
+        if j.get("status") in ("completed", "failed") and created < threshold:
+            del jobs[jid]
+            job_logs.pop(jid, None)
+            deleted += 1
+    save_jobs()
+    save_job_logs()
+    return {"status": "success", "deleted": deleted}
+
+
+@app.post("/api/jobs/cancel")
+async def cancel_current_job():
+    global _cancel_flag, _processing_queue, _processing_busy
+    with _processing_lock:
+        if not _processing_busy and not _processing_queue:
+            _cancel_flag = False
+            return {"status": "success", "cancelled_queued": 0, "message": "Nothing running"}
+        _cancel_flag = True
+        queued = list(_processing_queue)
+        _processing_queue.clear()
+    # Mark queued jobs as cancelled
+    for fn, args in queued:
+        jid = args[0] if args else None
+        if jid and jid in jobs:
+            jobs[jid]["status"] = "cancelled"
+            jobs[jid]["error"] = "Cancelled by user"
+            add_job_log(jid, "Cancelled (was in queue)", "warning")
+    save_jobs()
+    save_job_logs()
+    return {"status": "success", "cancelled_queued": len(queued)}
+
+
+# ── Processing endpoints (threaded) ──
+
+def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_count: int,
+                        blurred_bg: bool, crop_fill: bool, smart_selection: str,
+                        save_video: bool, save_folder: str,
+                        banner_enabled: bool, banner_x: int, banner_y: int,
+                        banner_w: int, banner_h: int, banner_opacity: int,
+                        filename_keywords: str = ""):
+    """Run processing in a thread, updating jobs + job_logs"""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        data = await request.json()
-    except:
-        body = await request.body()
-        data = json.loads(body)
-    folder = (data.get("folder") or "").strip()
-    if not folder:
-        return {"status": "error", "message": "Folder name required"}
-    folder_path = SAVED_DIR / folder
-    if not folder_path.exists():
-        return {"status": "error", "message": "Folder not found"}
-    import shutil
-    shutil.rmtree(folder_path)
-    print(f"[SAVED-FOLDERS] Deleted: {folder}")
-    return {"status": "success", "folder": folder}
+        jobs[job_id]["status"] = "processing"
+        add_job_log(job_id, f"Processing: {video_path}", "progress")
+
+        video_info = loop.run_until_complete(processor.get_video_info(video_path))
+        dur = video_info.get("duration", 0)
+        add_job_log(job_id, f"Duration: {dur:.1f}s", "info")
+
+        segments = loop.run_until_complete(
+            processor.extract_segments(video_path, short_length, shorts_count)
+        )
+        add_job_log(job_id, f"Found {len(segments)} segments", "success")
+
+        shorts_list = []
+        for i, seg in enumerate(segments):
+            if _cancel_flag:
+                add_job_log(job_id, f"Cancelled at short {i+1}/{len(segments)}", "warning")
+                break
+            add_job_log(job_id, f"[{i+1}/{len(segments)}] Processing {seg['start']:.1f}s-{seg['end']:.1f}s", "progress")
+
+            subtitle_data = loop.run_until_complete(
+                processor.get_subtitles(video_path, seg["start"], seg["end"])
+            )
+            add_job_log(job_id, f"[{i+1}/{len(segments)}] Subtitles: {len(subtitle_data.get('segments', []))} phrases", "info")
+
+            short_path = loop.run_until_complete(
+                processor.create_short(
+                    video_path, seg, i, job_id,
+                    subtitle_data.get("segments"),
+                    blurred_bg, filename_keywords, crop_fill,
+                    banner_enabled, None, banner_x, banner_y,
+                    banner_w, banner_h, banner_opacity
+                )
+            )
+
+            if not short_path or not Path(short_path).exists():
+                add_job_log(job_id, f"[{i+1}/{len(segments)}] Video not created", "warning")
+                continue
+
+            add_job_log(job_id, f"[{i+1}/{len(segments)}] Video created", "success")
+
+            title = f"#shorts #{i+1}"
+            description = "Подпишись!"
+            tags = ["#shorts", "#viral"]
+
+            shorts_list.append({"path": short_path, "title": title, "description": description, "tags": tags})
+
+            jobs[job_id].setdefault("shorts", []).append({
+                "index": i, "filename": Path(short_path).name,
+                "filepath": short_path, "title": title,
+                "description": description, "tags": tags
+            })
+            jobs[job_id]["progress"] = 20 + (i + 1) * 40 // len(segments)
+            save_jobs()
+
+            if save_video:
+                saved = SAVED_DIR / (save_folder or "saved")
+                saved.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(short_path, saved / f"short_{job_id}_{i}.mp4")
+                add_job_log(job_id, f"[{i+1}/{len(segments)}] Saved to {save_folder}", "success")
+
+        if _cancel_flag:
+            jobs[job_id]["status"] = "cancelled"
+            add_job_log(job_id, "Cancelled by user", "warning")
+        else:
+            jobs[job_id]["status"] = "completed"
+            jobs[job_id]["progress"] = 100
+            add_job_log(job_id, f"Completed! Created {len(shorts_list)} shorts", "success")
+        save_jobs()
+        save_job_logs()
+    except Exception as e:
+        jobs[job_id]["status"] = "cancelled" if _cancel_flag else "failed"
+        jobs[job_id]["error"] = str(e)
+        add_job_log(job_id, f"Error: {e}", "error")
+        save_jobs()
+        save_job_logs()
+        import traceback
+        traceback.print_exc()
+    finally:
+        loop.close()
+
+
+def _process_folder_thread(job_id: str, video_paths: list, short_length: int, shorts_count: int,
+                           blurred_bg: bool, crop_fill: bool, smart_selection: str,
+                           save_video: bool, save_folder: str,
+                           banner_enabled: bool, banner_x: int, banner_y: int,
+                           banner_w: int, banner_h: int, banner_opacity: int,
+                           filename_keywords: str = ""):
+    """Process multiple videos, distributing shorts_count across them"""
+    import asyncio
+    import math
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    jobs[job_id]["status"] = "processing"
+    total_made = 0
+    shorts_per_video_max = max(1, math.ceil(shorts_count / len(video_paths))) if shorts_count > 1 else shorts_count
+    try:
+        for vidx, (fname, vpath) in enumerate(video_paths):
+            if _cancel_flag:
+                add_job_log(job_id, "Cancelled by user", "warning")
+                break
+            if total_made >= shorts_count:
+                add_job_log(job_id, f"Reached target {shorts_count} shorts, stopping")
+                break
+
+            remaining = shorts_count - total_made
+            per_video = min(shorts_per_video_max, remaining)
+            add_job_log(job_id, f"[Video {vidx+1}/{len(video_paths)}] {fname} — {per_video} shorts", "info")
+
+            video_info = loop.run_until_complete(processor.get_video_info(vpath))
+            dur = video_info.get("duration", 0)
+            add_job_log(job_id, f"[Video {vidx+1}] Duration: {dur:.1f}s", "info")
+
+            segments = loop.run_until_complete(
+                processor.extract_segments(vpath, short_length, per_video)
+            )
+            add_job_log(job_id, f"[Video {vidx+1}] Found {len(segments)} segments", "info")
+
+            for i, seg in enumerate(segments):
+                if _cancel_flag:
+                    add_job_log(job_id, "Cancelled by user", "warning")
+                    break
+                if total_made >= shorts_count:
+                    break
+                idx = total_made
+                add_job_log(job_id, f"[{idx+1}/{shorts_count}] Processing {seg['start']:.1f}s-{seg['end']:.1f}s", "progress")
+
+                subtitle_data = loop.run_until_complete(
+                    processor.get_subtitles(vpath, seg["start"], seg["end"])
+                )
+                add_job_log(job_id, f"[{idx+1}/{shorts_count}] Subtitles: {len(subtitle_data.get('segments', []))} phrases", "info")
+
+                short_path = loop.run_until_complete(
+                    processor.create_short(
+                        vpath, seg, idx, job_id,
+                        subtitle_data.get("segments"),
+                        blurred_bg, filename_keywords, crop_fill,
+                        banner_enabled, None, banner_x, banner_y,
+                        banner_w, banner_h, banner_opacity
+                    )
+                )
+
+                if not short_path or not Path(short_path).exists():
+                    add_job_log(job_id, f"[{idx+1}/{shorts_count}] Video not created", "warning")
+                    continue
+
+                add_job_log(job_id, f"[{idx+1}/{shorts_count}] Video created", "success")
+                total_made += 1
+
+                title = f"#shorts #{idx+1}"
+                description = "Подпишись!"
+                tags = ["#shorts", "#viral"]
+
+                jobs[job_id].setdefault("shorts", []).append({
+                    "index": idx, "filename": Path(short_path).name,
+                    "filepath": short_path, "title": title,
+                    "description": description, "tags": tags
+                })
+                jobs[job_id]["progress"] = min(95, 20 + (idx + 1) * 70 // shorts_count)
+                save_jobs()
+
+                if save_video:
+                    saved = SAVED_DIR / (save_folder or "saved")
+                    saved.mkdir(parents=True, exist_ok=True)
+                    import shutil
+                    shutil.copy2(short_path, saved / f"short_{job_id}_{idx}.mp4")
+                    add_job_log(job_id, f"[{idx+1}/{shorts_count}] Saved to {save_folder}", "success")
+
+            if total_made >= shorts_count:
+                break
+
+        jobs[job_id]["status"] = "completed"
+        jobs[job_id]["progress"] = 100
+        add_job_log(job_id, f"Completed! Created {total_made} shorts from {len(video_paths)} videos", "success")
+        save_jobs()
+        save_job_logs()
+    except Exception as e:
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = str(e)
+        add_job_log(job_id, f"Error: {e}", "error")
+        save_jobs()
+        save_job_logs()
+        import traceback
+        traceback.print_exc()
+    finally:
+        loop.close()
+
+
+@app.post("/api/upload-url")
+async def upload_url(
+    url: str = Form(...),
+    short_length: int = Form(45),
+    shorts_count: int = Form(5),
+    smart_selection: str = Form("off"),
+    blurred_bg: bool = Form(False),
+    crop_fill: bool = Form(False),
+    save_video: bool = Form(False),
+    save_folder: str = Form("saved"),
+    banner_enabled: bool = Form(False),
+    banner_x: int = Form(0), banner_y: int = Form(0),
+    banner_w: int = Form(1080), banner_h: int = Form(200), banner_opacity: int = Form(100),
+    filename_keywords: str = Form("")
+):
+    job_id = str(uuid.uuid4())
+    now_str = time.strftime('%Y-%m-%d %H:%M:%S')
+    jobs[job_id] = {"id": job_id, "status": "queued", "progress": 0,
+                     "shorts_count": shorts_count, "short_length": short_length,
+                     "source": "url", "created_at": now_str, "shorts": []}
+    save_jobs()
+    add_job_log(job_id, f"Downloading: {url}", "info")
+
+    # Download in thread
+    def _dl_and_process():
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            video_path = loop.run_until_complete(processor.download_video(url, job_id))
+            add_job_log(job_id, "Video downloaded", "success")
+            jobs[job_id]["progress"] = 5
+            save_jobs()
+            # Continue processing
+            _process_job_thread(
+                job_id, video_path, short_length, shorts_count,
+                blurred_bg, crop_fill, smart_selection,
+                save_video, save_folder,
+                banner_enabled, banner_x, banner_y,
+                banner_w, banner_h, banner_opacity,
+                filename_keywords
+            )
+        except Exception as e:
+            jobs[job_id]["status"] = "failed"
+            jobs[job_id]["error"] = str(e)
+            add_job_log(job_id, f"Download error: {e}", "error")
+            save_jobs()
+            save_job_logs()
+        finally:
+            loop.close()
+    queued = _enqueue_job(_dl_and_process, ())
+    return {"job_id": job_id, "status": "queued" if not queued else "started"}
+
+
+@app.post("/api/upload-file")
+async def upload_file(
+    file: UploadFile = File(...),
+    short_length: int = Form(45),
+    shorts_count: int = Form(5),
+    smart_selection: str = Form("off"),
+    blurred_bg: bool = Form(False),
+    crop_fill: bool = Form(False),
+    save_video: bool = Form(False),
+    save_folder: str = Form("saved"),
+    banner_enabled: bool = Form(False),
+    banner_x: int = Form(0), banner_y: int = Form(0),
+    banner_w: int = Form(1080), banner_h: int = Form(200), banner_opacity: int = Form(100),
+    filename_keywords: str = Form("")
+):
+    job_id = str(uuid.uuid4())
+    safe = f"{job_id}_input.mp4"
+    video_path = str(UPLOAD_DIR / safe)
+
+    file_size = 0
+    with open(video_path, "wb") as f:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk: break
+            f.write(chunk)
+            file_size += len(chunk)
+
+    file_size_mb = file_size / (1024*1024)
+    now_str = time.strftime('%Y-%m-%d %H:%M:%S')
+    jobs[job_id] = {"id": job_id, "status": "queued", "progress": 0,
+                     "shorts_count": shorts_count, "short_length": short_length,
+                     "source": "file", "filename": file.filename,
+                     "file_size_mb": round(file_size_mb, 1),
+                     "created_at": now_str, "shorts": []}
+    save_jobs()
+    add_job_log(job_id, f"File: {file.filename} ({file_size_mb:.1f} MB)", "info")
+
+    started = _enqueue_job(_process_job_thread, (
+        job_id, video_path, short_length, shorts_count,
+        blurred_bg, crop_fill, smart_selection,
+        save_video, save_folder,
+        banner_enabled, banner_x, banner_y,
+        banner_w, banner_h, banner_opacity,
+        filename_keywords
+    ))
+
+    return {"job_id": job_id, "status": "started" if started else "queued"}
+
+
+@app.post("/api/upload-folder")
+async def upload_folder(
+    files: List[UploadFile] = File(...),
+    short_length: int = Form(45),
+    shorts_count: int = Form(5),
+    smart_selection: str = Form("off"),
+    blurred_bg: bool = Form(False),
+    crop_fill: bool = Form(False),
+    save_video: bool = Form(False),
+    save_folder: str = Form("saved"),
+    banner_enabled: bool = Form(False),
+    banner_x: int = Form(0), banner_y: int = Form(0),
+    banner_w: int = Form(1080), banner_h: int = Form(200), banner_opacity: int = Form(100),
+    filename_keywords: str = Form("")
+):
+    job_id = str(uuid.uuid4())
+    now_str = time.strftime('%Y-%m-%d %H:%M:%S')
+    jobs[job_id] = {"id": job_id, "status": "queued", "progress": 0,
+                     "shorts_count": shorts_count, "short_length": short_length,
+                     "source": "folder", "created_at": now_str, "shorts": []}
+    save_jobs()
+    add_job_log(job_id, f"Folder: {len(files)} videos", "info")
+
+    # Save all files first
+    video_paths = []
+    for i, f in enumerate(files):
+        safe = f"{job_id}_input_{i}.mp4"
+        path = str(UPLOAD_DIR / safe)
+        with open(path, "wb") as fh:
+            while True:
+                chunk = await f.read(1024 * 1024)
+                if not chunk: break
+                fh.write(chunk)
+        video_paths.append((f.filename or f"video_{i}", path))
+        add_job_log(job_id, f"Saved: {video_paths[-1][0]}", "info")
+
+    add_job_log(job_id, f"All {len(video_paths)} videos saved, starting processing", "info")
+
+    started = _enqueue_job(_process_folder_thread, (
+        job_id, video_paths, short_length, shorts_count,
+        blurred_bg, crop_fill, smart_selection,
+        save_video, save_folder,
+        banner_enabled, banner_x, banner_y,
+        banner_w, banner_h, banner_opacity,
+        filename_keywords
+    ))
+
+    return {"job_id": job_id, "status": "started" if started else "queued"}
+
+
+# ── Docs page ──
+DOCS_DIR = BASE_DIR / "docs"
+DOCS_DIR.mkdir(exist_ok=True)
+
+
+@app.get("/api/docs-list")
+async def docs_list():
+    docs = []
+    for f in sorted(DOCS_DIR.iterdir()) if DOCS_DIR.exists() else []:
+        if f.is_file():
+            name = f.name.replace("_", " ").replace(".md", "").replace(".txt", "")
+            docs.append({"file": f.name, "name": name, "desc": _DOC_DESCRIPTIONS.get(f.name, "")})
+    return {"status": "success", "docs": docs}
+
+
+_DOC_DESCRIPTIONS = {
+    "full_pipeline.md": "Как работает полный цикл: от загрузки видео до готовых шортсов",
+    "git_workflow.md": "Работа с Git: коммиты, ветки, пуши, деплой",
+    "optimal_settings.md": "Какие настройки ставить для разной длины и типа видео",
+    "smart_selection.md": "Умный отбор сегментов: как и зачем",
+    "smart_selection_algo.md": "Детальное описание алгоритмов скоринга и отбора",
+    "termux_setup.md": "Запуск бота на Android через Termux",
+    "youtube_api_credentials.txt": "Как получить credentials для YouTube API (пошагово)",
+}
+
+
+@app.get("/docs-local", response_class=HTMLResponse)
+async def docs_page():
+    files = sorted(DOCS_DIR.iterdir()) if DOCS_DIR.exists() else []
+    links = "".join(
+        f'<a href="/docs-file/{f.name}" class="doc-link">'
+        f'<div class="name">{f.name.replace("_", " ").replace(".md","").replace(".txt","")}</div>'
+        f'<div class="desc">{_DOC_DESCRIPTIONS.get(f.name, "")}</div></a>'
+        for f in files if f.is_file()
+    )
+    return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Доки</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh}}
+.header{{background:linear-gradient(135deg,#1f2937,#111827);padding:2rem 1rem;text-align:center;border-bottom:1px solid #30363d}}
+.header h1{{font-size:1.8rem;font-weight:700;margin-bottom:.5rem}}
+.header p{{color:#8b949e;font-size:.95rem}}
+.container{{max-width:800px;margin:0 auto;padding:1.5rem 1rem}}
+.doc-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}}
+.doc-link{{display:block;background:#161b22;border:1px solid #30363d;border-radius:12px;padding:1.2rem;text-decoration:none;color:#e6edf3;transition:all .2s}}
+.doc-link:hover{{border-color:#58a6ff;background:#1c2333;transform:translateY(-2px)}}
+.doc-link .name{{font-size:1.05rem;font-weight:600;color:#58a6ff}}
+.doc-link .desc{{font-size:.85rem;color:#8b949e;margin-top:.3rem}}
+.back{{display:inline-block;margin-bottom:1rem;color:#8b949e;text-decoration:none;font-size:.9rem}}
+.back:hover{{color:#58a6ff}}
+</style></head>
+<body>
+<div class="header"><h1>📖 Доки</h1><p>Руководства и справка по Video to Shorts Bot</p></div>
+<div class="container"><div class="doc-grid">{links}</div></div>
+</body></html>""")
+
+
+@app.get("/docs-file/{filename}")
+async def docs_file(filename: str):
+    f = DOCS_DIR / filename
+    if not f.exists() or not f.is_file():
+        return _err("Not found", 404)
+    import markdown
+    content_raw = f.read_text(encoding="utf-8")
+    # If it's a .md file, render as markdown
+    if filename.endswith(".md"):
+        html_body = markdown.markdown(content_raw, extensions=["fenced_code", "codehilite"])
+    else:
+        html_body = f"<pre style='background:#161b22;padding:1.5rem;border-radius:8px;overflow-x:auto;font-size:.9rem;line-height:1.5'>{content_raw}</pre>"
+    name_display = filename.replace("_", " ").replace(".md","").replace(".txt","")
+    return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>{name_display}</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh;padding:2rem 1rem}}
+.container{{max-width:900px;margin:0 auto}}
+h1{{font-size:1.5rem;margin-bottom:1rem;padding-bottom:.5rem;border-bottom:1px solid #30363d}}
+h2{{font-size:1.2rem;margin:1.5rem 0 .5rem;color:#58a6ff}}
+h3{{font-size:1.05rem;margin:1rem 0 .5rem;color:#79c0ff}}
+p{{margin:.5rem 0;line-height:1.6;color:#c9d1d9}}
+code{{background:#1f2937;padding:.15em .4em;border-radius:4px;font-size:.88em;color:#f0c674}}
+pre code{{background:none;padding:0;color:inherit}}
+pre{{background:#161b22;padding:1.2rem;border-radius:8px;overflow-x:auto;margin:.8rem 0;border:1px solid #30363d;font-size:.88rem;line-height:1.5}}
+ul,ol{{margin:.5rem 0;padding-left:1.5rem;line-height:1.6}}
+li{{margin:.3rem 0}}
+a{{color:#58a6ff;text-decoration:none}}
+a:hover{{text-decoration:underline}}
+blockquote{{border-left:3px solid #30363d;padding:.5rem 1rem;margin:.8rem 0;color:#8b949e;background:#161b22;border-radius:0 8px 8px 0}}
+.back{{display:inline-block;margin-bottom:1rem;color:#8b949e;text-decoration:none;font-size:.9rem}}
+.back:hover{{color:#58a6ff}}
+.nav{{margin-bottom:1.5rem}}
+</style></head>
+<body>
+<div class="container">
+<div class="nav"><a href="/docs-local" class="back">← Назад к списку</a></div>
+<h1>{name_display}</h1>
+{html_body}
+</div>
+</body></html>""")

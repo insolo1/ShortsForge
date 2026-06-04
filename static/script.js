@@ -109,6 +109,48 @@ async function loadFonts() {
     }
 }
 
+async function showDocsModal() {
+    const modal = document.getElementById('docs-modal');
+    const list = document.getElementById('docs-list');
+    if (!modal || !list) return;
+    modal.classList.remove('hidden');
+    list.innerHTML = '<div class="text-gray-500 text-center py-8">Загрузка...</div>';
+    try {
+        const res = await fetch('/api/docs-list');
+        const data = await res.json();
+        if (data.status === 'success' && data.docs.length) {
+            list.innerHTML = data.docs.map(d =>
+                `<a href="/docs-file/${d.file}" class="block bg-gray-800 hover:bg-gray-750 rounded-xl p-4 border border-gray-700 hover:border-blue-500 transition no-underline">
+                    <div class="text-blue-400 font-semibold text-base">${d.name}</div>
+                    <div class="text-gray-400 text-xs mt-1">${d.desc}</div>
+                </a>`
+            ).join('');
+        } else {
+            list.innerHTML = '<div class="text-gray-500 text-center py-8">Нет документов</div>';
+        }
+    } catch (e) {
+        list.innerHTML = '<div class="text-red-400 text-center py-8">Ошибка загрузки</div>';
+    }
+}
+
+async function loadStats() {
+    try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+        const btn = document.getElementById('stats-btn');
+        if (!btn) return;
+        document.getElementById('stat-videos').textContent = data.total_videos || 0;
+        document.getElementById('stat-shorts').textContent = data.total_shorts || 0;
+        document.getElementById('stat-completed').textContent = data.completed || 0;
+        document.getElementById('stat-failed').textContent = data.failed || 0;
+        document.getElementById('stat-running').textContent = data.running || 0;
+        document.getElementById('stat-jobs').textContent = data.total_jobs || 0;
+        btn.classList.remove('hidden');
+    } catch (e) {
+        console.error('Ошибка загрузки статистики:', e);
+    }
+}
+
 async function cleanupOld() {
     try {
         const res = await fetch('/api/cleanup', {method: 'POST'});
@@ -149,17 +191,62 @@ document.addEventListener('DOMContentLoaded', async function() {
     safeAddListener('cleanup-uploads-btn', 'click', cleanupUploads);
     safeAddListener('cleanup-output-btn', 'click', cleanupOutput);
     safeAddListener('cleanup-projects-btn', 'click', cleanupOldProjects);
+    safeAddListener('stats-btn', 'click', () => document.getElementById('stats-modal')?.classList.remove('hidden'));
+    safeAddListener('stats-modal-close', 'click', () => document.getElementById('stats-modal')?.classList.add('hidden'));
+    document.getElementById('stats-modal')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) e.target.classList.add('hidden');
+    });
+    safeAddListener('docs-btn', 'click', showDocsModal);
+    safeAddListener('docs-modal-close', 'click', () => document.getElementById('docs-modal')?.classList.add('hidden'));
+    document.getElementById('docs-modal')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) e.target.classList.add('hidden');
+    });
     safeAddListener('video-file', 'change', (e) => {
         const fileName = document.getElementById('file-name');
+        const folderMode = document.getElementById('folder-mode-file')?.checked;
         if (e.target.files[0]) {
-            fileName.textContent = 'Выбран: ' + e.target.files[0].name;
+            if (folderMode && e.target.files.length > 1) {
+                const firstPath = e.target.files[0].webkitRelativePath || '';
+                const folderName = firstPath.split('/')[0] || 'папка';
+                fileName.textContent = `Папка «${folderName}» — ${e.target.files.length} видео`;
+            } else {
+                fileName.textContent = 'Выбран: ' + e.target.files[0].name;
+            }
             fileName.classList.remove('hidden');
         }
     });
     
     initTabs();
     await loadFonts();
+    await loadStats();
     await loadSettings();
+    
+    // Smart mode selector
+    const smartDescs = {
+        off: 'Выкл — просто нарезка подряд',
+        global: 'Топ — выбирает лучшие моменты из всего видео, но может пропустить концовку',
+        parts: 'Сетка — равномерно покрывает всё видео, но локальный лучший может быть слабее',
+        hybrid: 'Гибрид — равномерное покрытие + финальный отбор только лучших'
+    };
+    document.querySelectorAll('.smart-mode-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tab = btn.dataset.tab;
+            const mode = btn.dataset.mode;
+            document.querySelectorAll(`.smart-mode-btn[data-tab="${tab}"]`).forEach(b => {
+                b.style.background = '#374151';
+                b.style.opacity = '0.6';
+            });
+            btn.style.background = '#1F2937';
+            btn.style.opacity = '1';
+            const desc = document.getElementById('smart-desc-' + tab);
+            if (desc) desc.textContent = smartDescs[mode] || '';
+        });
+        // init first as active
+        if (btn.querySelector(':checked')) {
+            btn.style.background = '#1F2937';
+            btn.style.opacity = '1';
+        }
+    });
     
     
     // Переключатели
@@ -209,6 +296,56 @@ document.addEventListener('DOMContentLoaded', async function() {
             });
         }
     });
+
+    // Обработчик для режима папки
+    const folderCb = document.getElementById('folder-mode-file');
+    const fileInput = document.getElementById('video-file');
+    if (folderCb && fileInput) {
+        folderCb.addEventListener('change', () => {
+            try {
+                if (folderCb.checked) {
+                    fileInput.setAttribute('webkitdirectory', '');
+                    fileInput.setAttribute('multiple', '');
+                    fileInput.removeAttribute('accept');
+                    const p = document.querySelector('label[for="video-file"] p');
+                    if (p) p.textContent = 'Выберите папку с видео';
+                } else {
+                    fileInput.removeAttribute('webkitdirectory');
+                    fileInput.removeAttribute('multiple');
+                    fileInput.setAttribute('accept', 'video/*');
+                    const p = document.querySelector('label[for="video-file"] p');
+                    if (p) p.textContent = 'Перетащите файл или нажмите';
+                }
+            } catch(e) { console.warn('Folder mode error:', e); }
+            fileInput.value = '';
+            document.getElementById('file-name').classList.add('hidden');
+        });
+    }
+    
+    // Обработчики для баннера
+    ['url', 'file', 'integration', 'settings'].forEach(tab => {
+        const cb = document.getElementById('banner-enabled-' + tab);
+        const settings = document.getElementById('banner-settings-' + tab);
+        if (cb && settings) {
+            cb.addEventListener('change', () => {
+                settings.classList.toggle('hidden', !cb.checked);
+            });
+        }
+        const opacity = document.getElementById('banner-opacity-' + tab);
+        const val = document.getElementById('banner-opacity-val-' + tab);
+        if (opacity && val) {
+            opacity.addEventListener('input', () => {
+                val.textContent = opacity.value;
+                if (tab === 'settings') updateSubtitlePreview();
+            });
+        }
+        if (tab === 'settings') {
+            const fileInput = document.getElementById('banner-file-settings');
+            if (fileInput) {
+                fileInput.addEventListener('change', updateSubtitlePreview);
+            }
+        }
+    });
     
     loadSaveFolders();
     
@@ -225,29 +362,49 @@ async function loadSettings() {
             const s = data.settings;
             // Субтитры
             if (document.getElementById('subtitle-font')) {
-                document.getElementById('subtitle-font').value = s.font || 'Verdana';
+                document.getElementById('subtitle-font').value = s.font || 'Montserrat';
                 document.getElementById('subtitle-style').value = s.style || 'normal';
-                document.getElementById('subtitle-fontsize').value = s.fontsize || 75;
-                document.getElementById('subtitle-color').value = s.fontcolor || 'white';
-                document.getElementById('subtitle-position').value = s.position || 600;
-                document.getElementById('subtitle-borderw').value = s.borderw || 6;
+                document.getElementById('subtitle-fontsize').value = s.fontsize || 100;
+                document.getElementById('subtitle-fontsize-val').textContent = s.fontsize || 100;
+                document.getElementById('subtitle-position').value = s.position || 1670;
+                document.getElementById('subtitle-position-val').textContent = s.position || 1670;
+                document.getElementById('subtitle-borderw').value = s.borderw || 3;
                 document.getElementById('subtitle-bordercolor').value = s.bordercolor || 'black';
-                document.getElementById('subtitle-boxborder').value = s.boxborder || 20;
+                document.getElementById('subtitle-boxborder').value = s.boxborder ?? 0;
                 document.getElementById('subtitle-boxcolor').value = s.boxcolor || 'black@0.8';
-                document.getElementById('subtitle-shadowx').value = s.shadowx || 3;
-                document.getElementById('subtitle-shadowy').value = s.shadowy || 3;
+                document.getElementById('subtitle-shadowx').value = s.shadowx || 2;
+                document.getElementById('subtitle-shadowy').value = s.shadowy || 2;
                 document.getElementById('subtitle-shadowcolor').value = s.shadowcolor || 'black';
                 document.getElementById('subtitle-capitalize').checked = s.capitalize !== false;
 
                 if (document.getElementById('subtitle-words-count')) {
-                    document.getElementById('subtitle-words-count').value = s.words_count || 5;
+                    document.getElementById('subtitle-words-count').value = s.words_count ?? 3;
                     document.getElementById('subtitle-word-fade').checked = s.word_fade !== false;
                 }
 
                 if (document.getElementById('api-provider') && s.api_provider) {
                     document.getElementById('api-provider').value = s.api_provider;
                 }
+
+                if (document.getElementById('crop-mode')) {
+                    document.getElementById('crop-mode').value = s.crop_mode || '9:16';
+                }
+                if (document.getElementById('zoom-enabled')) {
+                    document.getElementById('zoom-enabled').checked = s.zoom_enabled || false;
+                }
             }
+
+            // Баннер
+            if (document.getElementById('banner-x-settings')) {
+                document.getElementById('banner-x-settings').value = s.banner_x ?? '0';
+                document.getElementById('banner-y-settings').value = s.banner_y ?? '0';
+                document.getElementById('banner-w-settings').value = s.banner_w ?? '1080';
+                document.getElementById('banner-h-settings').value = s.banner_h ?? '200';
+                document.getElementById('banner-opacity-settings').value = s.banner_opacity ?? '100';
+                const val = document.getElementById('banner-opacity-val-settings');
+                if (val) val.textContent = s.banner_opacity ?? '100';
+            }
+            updateSubtitlePreview();
         }
     } catch (e) {
         console.error('Ошибка загрузки настроек:', e);
@@ -264,21 +421,21 @@ async function saveSettings() {
         const formData = new URLSearchParams();
         
         // Субтитры
-        formData.append('font', document.getElementById('subtitle-font').value);
-        formData.append('style', document.getElementById('subtitle-style').value);
-        formData.append('fontsize', document.getElementById('subtitle-fontsize').value);
-        formData.append('fontcolor', document.getElementById('subtitle-color').value);
-        formData.append('position', document.getElementById('subtitle-position').value);
-        formData.append('borderw', document.getElementById('subtitle-borderw').value);
-        formData.append('bordercolor', document.getElementById('subtitle-bordercolor').value);
-        formData.append('boxborder', document.getElementById('subtitle-boxborder').value);
-        formData.append('boxcolor', document.getElementById('subtitle-boxcolor').value);
-        formData.append('shadowx', document.getElementById('subtitle-shadowx').value);
-        formData.append('shadowy', document.getElementById('subtitle-shadowy').value);
-        formData.append('shadowcolor', document.getElementById('subtitle-shadowcolor').value);
-        formData.append('capitalize', document.getElementById('subtitle-capitalize').checked);
-        formData.append('crop_mode', '9:16');
-        formData.append('zoom_enabled', false);
+        formData.append('font', document.getElementById('subtitle-font')?.value || 'Montserrat');
+        formData.append('style', document.getElementById('subtitle-style')?.value || 'normal');
+        formData.append('fontsize', document.getElementById('subtitle-fontsize')?.value || '100');
+        formData.append('fontcolor', document.getElementById('subtitle-color')?.value || 'white');
+        formData.append('position', document.getElementById('subtitle-position')?.value || '1670');
+        formData.append('borderw', document.getElementById('subtitle-borderw')?.value || '3');
+        formData.append('bordercolor', document.getElementById('subtitle-bordercolor')?.value || 'black');
+        formData.append('boxborder', document.getElementById('subtitle-boxborder')?.value || '0');
+        formData.append('boxcolor', document.getElementById('subtitle-boxcolor')?.value || 'black@0.8');
+        formData.append('shadowx', document.getElementById('subtitle-shadowx')?.value || '2');
+        formData.append('shadowy', document.getElementById('subtitle-shadowy')?.value || '2');
+        formData.append('shadowcolor', document.getElementById('subtitle-shadowcolor')?.value || 'black');
+        formData.append('capitalize', document.getElementById('subtitle-capitalize')?.checked ?? false);
+        formData.append('crop_mode', document.getElementById('crop-mode')?.value || '9:16');
+        formData.append('zoom_enabled', document.getElementById('zoom-enabled')?.checked ?? false);
 
         const apiKeyVal = document.getElementById('api-key-input')?.value?.trim();
         const apiProvider = document.getElementById('api-provider')?.value;
@@ -293,6 +450,13 @@ async function saveSettings() {
         formData.append('words_count', wordsCountBackend);
         formData.append('word_fade', wordFadeVal ? 'true' : 'false');
         
+        // Баннер
+        formData.append('banner_x', document.getElementById('banner-x-settings')?.value || '0');
+        formData.append('banner_y', document.getElementById('banner-y-settings')?.value || '0');
+        formData.append('banner_w', document.getElementById('banner-w-settings')?.value || '1080');
+        formData.append('banner_h', document.getElementById('banner-h-settings')?.value || '200');
+        formData.append('banner_opacity', document.getElementById('banner-opacity-settings')?.value || '100');
+        
         const response = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -301,14 +465,19 @@ async function saveSettings() {
         
         const data = await response.json();
         if (data.status === 'success') {
-            showNotification('Настройки сохранены', 'success');
+            await loadSettings();
+            btn.textContent = '✓ Сохранено';
+            setTimeout(() => {
+                btn.textContent = 'Сохранить настройки';
+                btn.disabled = false;
+            }, 2000);
+            return;
         }
     } catch (e) {
-        showNotification('Ошибка сохранения', 'error');
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Сохранить настройки';
+        alert('Ошибка сохранения настроек');
     }
+    btn.disabled = false;
+    btn.textContent = 'Сохранить настройки';
 }
 
 // Логи
@@ -628,30 +797,48 @@ async function loadPresets() {
 
 // Создание Shorts из URL
 async function createShorts() {
-    const shortLength = document.getElementById('short-length').value;
-    const shortsCount = document.getElementById('shorts-count').value;
+    const shortLength = document.getElementById('short-length')?.value || '45';
+    const shortsCount = document.getElementById('shorts-count')?.value || '5';
     const btn = document.getElementById('create-btn');
     
     btn.disabled = true;
     btn.textContent = 'Загружаем...';
     
     try {
-        const url = document.getElementById('video-url').value;
+        const url = document.getElementById('video-url')?.value || '';
         if (!url) {
             btn.disabled = false;
             btn.textContent = 'Создать Shorts';
             return alert('Введите URL');
         }
         
-        const smartSelection = String(document.getElementById('smart-selection-url').checked);
-        const blurredBg = String(document.getElementById('blurred-bg-url').checked);
-        const saveVideo = String(document.getElementById('save-video-url').checked);
-        const saveFolder = getSelectedSaveFolder('url');
-        const filenameKeywords = document.getElementById('filename-keywords')?.value?.trim() || '';
+        const formData = new FormData();
+        formData.append('url', url);
+        formData.append('short_length', shortLength);
+        formData.append('shorts_count', shortsCount);
+        formData.append('smart_selection', document.querySelector('input[name="smart-mode-url"]:checked')?.value || 'off');
+        formData.append('blurred_bg', String(document.getElementById('blurred-bg-url')?.checked || false));
+        formData.append('crop_fill', String(document.getElementById('crop-fill-url')?.checked || false));
+        formData.append('save_video', String(document.getElementById('save-video-url')?.checked || false));
+        formData.append('save_folder', getSelectedSaveFolder('url'));
+        formData.append('filename_keywords', document.getElementById('filename-keywords')?.value?.trim() || '');
+
+        // Баннер
+        const bUrl = document.getElementById('banner-enabled-url');
+        formData.append('banner_enabled', String(bUrl?.checked || false));
+        if (bUrl?.checked) {
+            formData.append('banner_x', document.getElementById('banner-x-settings')?.value || '0');
+            formData.append('banner_y', document.getElementById('banner-y-settings')?.value || '0');
+            formData.append('banner_w', document.getElementById('banner-w-settings')?.value || '1080');
+            formData.append('banner_h', document.getElementById('banner-h-settings')?.value || '200');
+            formData.append('banner_opacity', document.getElementById('banner-opacity-settings')?.value || '100');
+            const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
+            if (bannerFile) formData.append('banner_file', bannerFile);
+        }
+
         const response = await fetch('/api/upload-url', {
             method: 'POST',
-            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: `url=${encodeURIComponent(url)}&short_length=${shortLength}&shorts_count=${shortsCount}&smart_selection=${smartSelection}&blurred_bg=${blurredBg}&crop_fill=${String(document.getElementById('crop-fill-url').checked)}&save_video=${saveVideo}&save_folder=${encodeURIComponent(saveFolder)}&filename_keywords=${encodeURIComponent(filenameKeywords)}`
+            body: formData
         });
         
         if (!response.ok) {
@@ -661,7 +848,9 @@ async function createShorts() {
         const data = await response.json();
         currentJobId = data.job_id;
         
-        document.getElementById('progress-section').classList.remove('hidden');
+        document.getElementById('progress-section')?.classList.remove('hidden');
+        document.getElementById('results-section')?.classList.add('hidden');
+        document.getElementById('shorts-list').innerHTML = '';
         btn.textContent = 'Обрабатываем...';
         startPolling();
     } catch (e) {
@@ -673,9 +862,10 @@ async function createShorts() {
 
 // Создание Shorts из файла
 async function createShortsFromFile() {
-    const shortLength = document.getElementById('short-length-file').value;
-    const shortsCount = document.getElementById('shorts-count-file').value;
+    const shortLength = document.getElementById('short-length-file')?.value || '45';
+    const shortsCount = document.getElementById('shorts-count-file')?.value || '5';
     const btn = document.getElementById('create-btn-file');
+    const folderMode = document.getElementById('folder-mode-file')?.checked;
     
     btn.disabled = true;
     btn.textContent = 'Загружаем...';
@@ -685,26 +875,59 @@ async function createShortsFromFile() {
         if (!fileInput.files[0]) {
             btn.disabled = false;
             btn.textContent = 'Создать Shorts';
-            return alert('Выберите файл');
+            return alert(folderMode ? 'Выберите папку' : 'Выберите файл');
         }
-        
-        const file = fileInput.files[0];
-        const fileSizeMB = (file.size / 1024 / 1024).toFixed(1);
-        
+
         const formData = new FormData();
-        formData.append('file', file);
+        if (folderMode) {
+            for (const f of fileInput.files) {
+                if (f.type.startsWith('video/')) {
+                    formData.append('files', f);
+                }
+            }
+            if (!formData.has('files')) {
+                btn.disabled = false;
+                btn.textContent = 'Создать Shorts';
+                return alert('В папке нет видеофайлов');
+            }
+        } else {
+            formData.append('file', fileInput.files[0]);
+        }
+
         formData.append('short_length', shortLength);
         formData.append('shorts_count', shortsCount);
-        formData.append('smart_selection', String(document.getElementById('smart-selection-file').checked));
-        formData.append('blurred_bg', String(document.getElementById('blurred-bg-file').checked));
-        formData.append('crop_fill', String(document.getElementById('crop-fill-file').checked));
-        formData.append('save_video', String(document.getElementById('save-video-file').checked));
+        formData.append('smart_selection', document.querySelector('input[name="smart-mode-file"]:checked')?.value || 'off');
+        formData.append('blurred_bg', String(document.getElementById('blurred-bg-file')?.checked || false));
+        formData.append('crop_fill', String(document.getElementById('crop-fill-file')?.checked || false));
+        formData.append('save_video', String(document.getElementById('save-video-file')?.checked || false));
         formData.append('save_folder', getSelectedSaveFolder('file'));
         formData.append('filename_keywords', document.getElementById('filename-keywords')?.value?.trim() || '');
         
-        document.getElementById('progress-section').classList.remove('hidden');
+        // Баннер
+        const bFile = document.getElementById('banner-enabled-file');
+        formData.append('banner_enabled', String(bFile?.checked || false));
+        if (bFile?.checked) {
+            formData.append('banner_x', document.getElementById('banner-x-settings')?.value || '0');
+            formData.append('banner_y', document.getElementById('banner-y-settings')?.value || '0');
+            formData.append('banner_w', document.getElementById('banner-w-settings')?.value || '1080');
+            formData.append('banner_h', document.getElementById('banner-h-settings')?.value || '200');
+            formData.append('banner_opacity', document.getElementById('banner-opacity-settings')?.value || '100');
+            const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
+            if (bannerFile) formData.append('banner_file', bannerFile);
+        }
+        
+        document.getElementById('progress-section')?.classList.remove('hidden');
+        document.getElementById('results-section')?.classList.add('hidden');
+        document.getElementById('shorts-list').innerHTML = '';
         clearLogs();
-        addLog(`Файл: ${file.name} (${fileSizeMB} МБ)`, 'info');
+        if (folderMode) {
+            addLog(`Папка: ${fileInput.files.length} видео`, 'info');
+        } else {
+            const fileSizeMB = (fileInput.files[0].size / 1024 / 1024).toFixed(1);
+            addLog(`Файл: ${fileInput.files[0].name} (${fileSizeMB} МБ)`, 'info');
+        }
+
+        const endpoint = folderMode ? '/api/upload-folder' : '/api/upload-file';
         
         const xhr = new XMLHttpRequest();
         
@@ -724,7 +947,7 @@ async function createShortsFromFile() {
             if (xhr.status >= 200 && xhr.status < 300) {
                 const data = JSON.parse(xhr.responseText);
                 currentJobId = data.job_id;
-                addLog('Файл загружен! Обработка...', 'success');
+                addLog('Файлы загружены! Обработка...', 'success');
                 btn.textContent = 'Обрабатываем...';
                 startPolling();
             } else {
@@ -740,7 +963,7 @@ async function createShortsFromFile() {
             btn.textContent = 'Создать Shorts';
         });
         
-        xhr.open('POST', '/api/upload-file');
+        xhr.open('POST', endpoint);
         xhr.send(formData);
     } catch (e) {
         addLog('Ошибка: ' + e.message, 'error');
@@ -749,22 +972,47 @@ async function createShortsFromFile() {
     }
 }
 
+async function cancelCurrentJob() {
+    if (!confirm('Отменить текущую обработку?')) return;
+    try {
+        const res = await fetch('/api/jobs/cancel', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'success') {
+            addLog('Обработка отменена', 'warning');
+            document.getElementById('cancel-job-btn')?.classList.add('hidden');
+            document.getElementById('progress-section')?.classList.add('hidden');
+            const fileBtn = document.getElementById('create-btn-file');
+            const urlBtn = document.getElementById('create-btn');
+            if (fileBtn) { fileBtn.disabled = false; fileBtn.textContent = 'Создать Shorts'; }
+            if (urlBtn) { urlBtn.disabled = false; urlBtn.textContent = 'Создать Shorts'; }
+            loadStats();
+        }
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
 function startPolling() {
     if (pollInterval) clearInterval(pollInterval);
     let shownLogs = 0;
     let staleCount = 0;
     
+    document.getElementById('cancel-job-btn')?.classList.remove('hidden');
+    
     pollInterval = setInterval(async () => {
         const res = await fetch(`/api/status/${currentJobId}`);
         const data = await res.json();
         
-        document.getElementById('progress-bar').style.width = data.progress + '%';
-        document.getElementById('progress-text').textContent = getStatusText(data.status);
+        const pb = document.getElementById('progress-bar');
+        const pt = document.getElementById('progress-text');
+        if (pb) pb.style.width = data.progress + '%';
+        if (pt) pt.textContent = getStatusText(data.status);
         
         updateStages(data.status);
         
-        if (data.status === 'completed' || data.status === 'failed') {
+        if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
             clearInterval(pollInterval);
+            document.getElementById('cancel-job-btn')?.classList.add('hidden');
             const fileBtn = document.getElementById('create-btn-file');
             const urlBtn = document.getElementById('create-btn');
             if (fileBtn) { fileBtn.disabled = false; fileBtn.textContent = 'Создать Shorts'; }
@@ -773,8 +1021,9 @@ function startPolling() {
                 showResults(data.shorts);
                 addLog('Готово!', 'success');
             } else {
-                addLog('Ошибка: ' + data.error, 'error');
+                addLog('Ошибка: ' + (data.error || data.status), 'error');
             }
+            loadStats();
         }
         
         try {
@@ -795,18 +1044,20 @@ function startPolling() {
 
 function getStatusText(status) {
     const texts = {
-        'downloading': 'Скачивание видео...',
-        'processing': 'Нарезаем на шорты...',
-        'generating': 'Генерируем названия...',
-        'completed': 'Готово!'
-    };
+        'downloading': 'Скачивание...',
+        'processing': 'Обработка...',
+        'completed': 'Готово!',
+        'failed': 'Ошибка',
+        'queued': 'В очереди',
+        'cancelled': 'Отменено'
+    }
     return texts[status] || 'Обработка...';
 }
 
 function showResults(shorts) {
     currentShorts = shorts;
-    document.getElementById('progress-section').classList.add('hidden');
-    document.getElementById('results-section').classList.remove('hidden');
+    document.getElementById('progress-section')?.classList.add('hidden');
+    document.getElementById('results-section')?.classList.remove('hidden');
     
     const downloadBtn = document.getElementById('download-all-zip-btn');
     if (shorts.length > 0) {
@@ -843,10 +1094,11 @@ function showResults(shorts) {
 }
 
 async function saveChanges(shortId) {
-    const card = document.querySelector(`[data-id="${shortId}"]`).closest('.card');
-    const title = card.querySelector('[data-field="title"]').value;
-    const description = card.querySelector('[data-field="description"]').value;
-    const tags = card.querySelector('[data-field="tags"]').value;
+    const card = document.querySelector(`[data-id="${shortId}"]`)?.closest('.card');
+    if (!card) return alert('Ошибка: карточка не найдена');
+    const title = card.querySelector('[data-field="title"]')?.value || '';
+    const description = card.querySelector('[data-field="description"]')?.value || '';
+    const tags = card.querySelector('[data-field="tags"]')?.value || '';
     
     await fetch(`/api/update-short/${shortId}`, {
         method: 'POST',
@@ -890,11 +1142,11 @@ async function startIntegration() {
     try {
         const formData = new FormData();
         
-        const source = document.getElementById('integration-source').value;
+        const source = document.getElementById('integration-source')?.value || 'url';
         formData.append('source', source);
         
         if (source === 'url') {
-            const url = document.getElementById('integration-video-url').value;
+            const url = document.getElementById('integration-video-url')?.value || '';
             if (!url) {
                 alert('Введите YouTube URL');
                 btn.disabled = false;
@@ -914,9 +1166,9 @@ async function startIntegration() {
         }
         
         // Показываем окно этапов
-        document.getElementById('integration-stages-window').classList.remove('hidden');
+        document.getElementById('integration-stages-window')?.classList.remove('hidden');
         
-        const accounts = document.getElementById('youtube-accounts').value;
+        const accounts = document.getElementById('youtube-accounts')?.value || '';
         if (!accounts.trim()) {
             alert('Добавьте хотя бы один YouTube аккаунт');
             btn.disabled = false;
@@ -924,38 +1176,53 @@ async function startIntegration() {
             return;
         }
         formData.append('accounts', accounts);
-        formData.append('distribution_mode', document.getElementById('distribution-mode').value);
-        formData.append('custom_distribution', document.getElementById('custom-distribution').value);
-        formData.append('videos_per_day', document.getElementById('videos-per-day').value);
-        formData.append('short_length', document.getElementById('integration-short-length').value);
-        formData.append('shorts_count', document.getElementById('integration-shorts-count').value);
+        formData.append('distribution_mode', document.getElementById('distribution-mode')?.value || 'equal');
+        formData.append('custom_distribution', document.getElementById('custom-distribution')?.value || '');
+        formData.append('videos_per_day', document.getElementById('videos-per-day')?.value || '3');
+        formData.append('short_length', document.getElementById('integration-short-length')?.value || '45');
+        formData.append('shorts_count', document.getElementById('integration-shorts-count')?.value || '5');
         formData.append('blurred_bg', String(document.getElementById('integration-blurred-bg').checked));
         formData.append('save_video', String(document.getElementById('save-video-integration').checked));
         formData.append('save_folder', getSelectedSaveFolder('integration'));
-        
+        formData.append('crop_fill', String(document.getElementById('integration-crop-fill')?.checked || false));
+        formData.append('smart_selection', document.querySelector('input[name="smart-mode-integration"]:checked')?.value || 'off');
+
+        // Баннер
+        const bInt = document.getElementById('banner-enabled-integration');
+        formData.append('banner_enabled', String(bInt?.checked || false));
+        if (bInt?.checked) {
+            formData.append('banner_x', document.getElementById('banner-x-settings')?.value || '0');
+            formData.append('banner_y', document.getElementById('banner-y-settings')?.value || '0');
+            formData.append('banner_w', document.getElementById('banner-w-settings')?.value || '1080');
+            formData.append('banner_h', document.getElementById('banner-h-settings')?.value || '200');
+            formData.append('banner_opacity', document.getElementById('banner-opacity-settings')?.value || '100');
+            const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
+            if (bannerFile) formData.append('banner_file', bannerFile);
+        }
+
         // Музыка
         formData.append('enable_audio', document.getElementById('enable-audio').checked);
-        if (document.getElementById('enable-audio').checked) {
-            const audioFile = document.getElementById('integration-audio-file').files[0];
+        if (document.getElementById('enable-audio')?.checked) {
+            const audioFile = document.getElementById('integration-audio-file')?.files?.[0];
             if (audioFile) {
                 formData.append('audio_file', audioFile);
-                formData.append('audio_start', document.getElementById('audio-start').value);
-                formData.append('audio_end', document.getElementById('audio-end').value);
-                formData.append('replace_audio', document.getElementById('replace-audio').checked);
+                formData.append('audio_start', document.getElementById('audio-start')?.value || '0');
+                formData.append('audio_end', document.getElementById('audio-end')?.value || '30');
+                formData.append('replace_audio', document.getElementById('replace-audio')?.checked || false);
             }
         }
         
         // Теги
-        formData.append('enable_required_tags', document.getElementById('enable-required-tags').checked);
-        formData.append('required_tags', document.getElementById('required-tags').value);
-        formData.append('enable_optional_tags', document.getElementById('enable-optional-tags').checked);
+        formData.append('enable_required_tags', document.getElementById('enable-required-tags')?.checked || false);
+        formData.append('required_tags', document.getElementById('required-tags')?.value || '');
+        formData.append('enable_optional_tags', document.getElementById('enable-optional-tags')?.checked || false);
         
         // Отложенная публикация
-        formData.append('enable_scheduled', document.getElementById('enable-scheduled').checked);
-        if (document.getElementById('enable-scheduled').checked) {
-            formData.append('schedule_start_date', document.getElementById('schedule-start-date').value);
-            formData.append('schedule_start_time', document.getElementById('schedule-start-time').value);
-            formData.append('schedule_interval', document.getElementById('schedule-interval').value);
+        formData.append('enable_scheduled', document.getElementById('enable-scheduled')?.checked || false);
+        if (document.getElementById('enable-scheduled')?.checked) {
+            formData.append('schedule_start_date', document.getElementById('schedule-start-date')?.value || '');
+            formData.append('schedule_start_time', document.getElementById('schedule-start-time')?.value || '12:00');
+            formData.append('schedule_interval', document.getElementById('schedule-interval')?.value || '60');
         }
         
         const response = await fetch('/api/integration/start', {
@@ -1167,18 +1434,18 @@ async function loadPresetFromSelect(e) {
 
 function updateSubtitlePreview() {
     const text = document.getElementById('preview-text')?.value || 'Текст субтитров';
-    const font = document.getElementById('subtitle-font')?.value || 'Arial';
+    const font = document.getElementById('subtitle-font')?.value || 'Montserrat';
     const style = document.getElementById('subtitle-style')?.value || 'normal';
-    const fontsize = parseInt(document.getElementById('subtitle-fontsize')?.value || '75');
+    const fontsize = parseInt(document.getElementById('subtitle-fontsize')?.value || '100');
     const color = document.getElementById('subtitle-color')?.value || 'white';
-    const position = parseInt(document.getElementById('subtitle-position')?.value || '600');
-    const borderw = parseInt(document.getElementById('subtitle-borderw')?.value || '0');
+    const position = parseInt(document.getElementById('subtitle-position')?.value || '1670');
+    const borderw = parseInt(document.getElementById('subtitle-borderw')?.value || '3');
     const bordercolor = document.getElementById('subtitle-bordercolor')?.value || 'black';
     const boxborder = parseInt(document.getElementById('subtitle-boxborder')?.value || '0');
     const boxcolor = document.getElementById('subtitle-boxcolor')?.value || 'none';
-    const shadowx = parseInt(document.getElementById('subtitle-shadowx')?.value || '0');
-    const shadowy = parseInt(document.getElementById('subtitle-shadowy')?.value || '0');
-    const shadowcolor = document.getElementById('subtitle-shadowcolor')?.value || 'none';
+    const shadowx = parseInt(document.getElementById('subtitle-shadowx')?.value || '2');
+    const shadowy = parseInt(document.getElementById('subtitle-shadowy')?.value || '2');
+    const shadowcolor = document.getElementById('subtitle-shadowcolor')?.value || 'black';
     const capitalize = document.getElementById('subtitle-capitalize')?.checked || false;
     const previewBg = document.getElementById('preview-bg-color')?.value || 'black';
 
@@ -1240,6 +1507,62 @@ function updateSubtitlePreview() {
     if (preview) {
         preview.style.backgroundColor = previewBg;
     }
+
+    // Баннер в предпросмотре
+    const bannerEnabled = document.getElementById('banner-enabled-settings')?.checked || false;
+    const bannerLayer = document.getElementById('preview-banner-layer');
+    const bannerImg = document.getElementById('preview-banner-img');
+    const bannerVideo = document.getElementById('preview-banner-video');
+    if (bannerLayer && bannerImg) {
+        const fileInput = document.getElementById('banner-file-settings');
+        if (bannerEnabled && fileInput?.files?.[0]) {
+            if (!window._bannerPreviewUrl || window._bannerPreviewFile !== fileInput.files[0]) {
+                window._bannerPreviewFile = fileInput.files[0];
+                const isVideo = fileInput.files[0].type.startsWith('video/');
+                if (isVideo) {
+                    if (window._bannerPreviewUrl && window._bannerPreviewUrl.startsWith('blob:')) URL.revokeObjectURL(window._bannerPreviewUrl);
+                    window._bannerPreviewUrl = URL.createObjectURL(fileInput.files[0]);
+                    applyBannerPreview(bannerImg, bannerVideo, bannerLayer, true);
+                } else {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        window._bannerPreviewUrl = e.target.result;
+                        applyBannerPreview(bannerImg, bannerVideo, bannerLayer, false);
+                    };
+                    reader.readAsDataURL(fileInput.files[0]);
+                    return;
+                }
+                return;
+            }
+            const isVideo = fileInput.files[0].type.startsWith('video/');
+            applyBannerPreview(bannerImg, bannerVideo, bannerLayer, isVideo);
+        } else {
+            bannerLayer.style.display = 'none';
+        }
+    }
+}
+
+function applyBannerPreview(bannerImg, bannerVideo, bannerLayer, isVideo) {
+    if (!window._bannerPreviewUrl) return;
+    const bw = parseInt(document.getElementById('banner-w-settings')?.value || '1080');
+    const bh = parseInt(document.getElementById('banner-h-settings')?.value || '200');
+    const bx = parseInt(document.getElementById('banner-x-settings')?.value || '0');
+    const by = parseInt(document.getElementById('banner-y-settings')?.value || '0');
+    const op = parseInt(document.getElementById('banner-opacity-settings')?.value || '100');
+    const scaleW = 180 / 1080;
+    const scaleH = 320 / 1920;
+    const el = isVideo ? bannerVideo : bannerImg;
+    const other = isVideo ? bannerImg : bannerVideo;
+    el.src = window._bannerPreviewUrl;
+    el.style.width = Math.round(bw * scaleW) + 'px';
+    el.style.height = Math.round(bh * scaleH) + 'px';
+    el.style.position = 'absolute';
+    el.style.left = Math.round(bx * scaleW) + 'px';
+    el.style.top = Math.round(by * scaleH) + 'px';
+    el.style.opacity = op / 100;
+    el.style.display = 'block';
+    other.style.display = 'none';
+    bannerLayer.style.display = 'block';
 }
 
 function initTabs() {}
@@ -1248,7 +1571,8 @@ function initSubtitlePreview() {
     const ids = ['subtitle-font', 'subtitle-style', 'subtitle-fontsize', 'subtitle-color',
                  'subtitle-position', 'subtitle-borderw', 'subtitle-bordercolor', 'subtitle-boxborder', 'subtitle-boxcolor',
                  'subtitle-shadowx', 'subtitle-shadowy', 'subtitle-shadowcolor',
-                 'preview-text', 'preview-bg-color'];
+                 'preview-text', 'preview-bg-color',
+                 'banner-x-settings', 'banner-y-settings', 'banner-w-settings', 'banner-h-settings'];
     
     ids.forEach(id => {
         const el = document.getElementById(id);
@@ -1260,6 +1584,9 @@ function initSubtitlePreview() {
 
     const capEl = document.getElementById('subtitle-capitalize');
     if (capEl) capEl.addEventListener('change', updateSubtitlePreview);
+
+    const bannerEnabled = document.getElementById('banner-enabled-settings');
+    if (bannerEnabled) bannerEnabled.addEventListener('change', updateSubtitlePreview);
 
     updateSubtitlePreview();
 }
