@@ -1,98 +1,108 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: videobot-db
-    restart: unless-stopped
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: videobot
-      POSTGRES_USER: videobot
-      POSTGRES_PASSWORD: videobot
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U videobot"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: videobot-redis
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: videobot-api
-    restart: unless-stopped
+  web:
+    build: .
+    container_name: web-app
+    entrypoint: ["wait-for-it.sh", "db", "5432", "python", "manage.py"]
     ports:
-      - "8000:8000"
+      - "5000:5000"
     volumes:
-      - ./uploads:/app/uploads
-      - ./output:/app/output
-      - ./tokens:/app/tokens
-      - ./google_credentials:/app/google_credentials
-      - ./saved:/app/saved
-      - ./.env:/app/.env:ro
-      - ./client_secret.json:/app/client_secret.json:ro
-      - whisper_cache:/app/.cache/whisper
+      - .:/app
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://videobot:videobot@postgres:5432/videobot
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - TZ=Europe/Moscow
+      - FLASK_APP=manage.py
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    restart: always
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+    networks:
+      - app_network
 
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile.worker
-    container_name: videobot-worker
-    restart: unless-stopped
+    build: .
+    container_name: worker-app
+    restart: always
+    entrypoint: ["wait-for-it.sh", "db", "5432", "python", "-u", "oblig_worker/main.py"]
+    ports:
+      - "5001:5001"
     volumes:
-      - ./uploads:/app/uploads
-      - ./output:/app/output
-      - ./tokens:/app/tokens
-      - ./google_credentials:/app/google_credentials
-      - ./saved:/app/saved
-      - ./.env:/app/.env:ro
-      - ./client_secret.json:/app/client_secret.json:ro
-      - whisper_cache:/app/.cache/whisper
+      - .:/app
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://videobot:videobot@postgres:5432/videobot
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - OMP_NUM_THREADS=2
-      - TZ=Europe/Moscow
-    deploy:
-      replicas: 2
+      - PYTHONPATH=/app
+      - TZ=Asia/Yekaterinburg
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+    networks:
+      - app_network
 
-  frontend:
+  db:
+    image: postgres:13
+    container_name: db-app
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "0.0.0.0:5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app_network
+
+  mitsubishi-docs:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: videobot-frontend
+      context: ./mitsubishi
+      dockerfile: Dockerfile.mitsubishi
+    container_name: mitsubishi-docs
     restart: unless-stopped
     ports:
-      - "3000:80"
-    depends_on:
-      - backend
+      - "8100:8000"
+    volumes:
+      - ./mitsubishi:/app
+    networks:
+      - app_network
+
+  videobot:
+    build:
+      context: ./videobot
+      dockerfile: Dockerfile
+    container_name: videobot
+    restart: unless-stopped
+    ports:
+      - "8200:8000"
+    volumes:
+      - ./videobot/app:/app/app
+      - ./videobot/static:/app/static
+      - ./videobot/.env:/app/.env:ro
+      - ./videobot/client_secret.json:/app/client_secret.json:ro
+      - ./videobot/users.json:/app/users.json:ro
+      - ./videobot/sessions.json:/app/sessions.json
+      - ./videobot/presets.json:/app/presets.json
+      - ./videobot/uploads:/app/uploads
+      - ./videobot/output:/app/output
+      - ./videobot/tokens:/app/tokens
+      - ./videobot/google_credentials:/app/google_credentials
+    environment:
+      - FFMPEG_PATH=/usr/bin/ffmpeg
+      - PYTHONPATH=/app
+      - TZ=Asia/Yekaterinburg
+    networks:
+      - app_network
 
 volumes:
-  pgdata:
-  whisper_cache:
+  postgres_data:
+
+networks:
+  app_network:
+    driver: bridge

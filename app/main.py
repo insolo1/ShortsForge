@@ -601,7 +601,7 @@ async def download_short(short_idx: int, job_id: str = None):
 
 @app.get("/api/download-zip/{job_id}")
 async def download_job_zip(job_id: str):
-    import tempfile, zipfile
+    import tempfile, zipfile, functools
     j = jobs.get(job_id)
     if not j:
         return _err("Job not found", 404)
@@ -609,13 +609,19 @@ async def download_job_zip(job_id: str):
     if not shorts:
         return _err("No shorts", 404)
 
+    # Проверяем что файлы существуют
+    valid = [s for s in shorts if Path(s.get("filepath", "")).exists()]
+    if not valid:
+        return _err("No files found on disk", 404)
+
+    total_gb = sum(Path(s["filepath"]).stat().st_size for s in valid) / (1024**3)
+    print(f"[ZIP] Packing {len(valid)} files ({total_gb:.1f}GB) for job {job_id}...")
+
+    # Генерируем ZIP в temp файле (в отдельном потоке, чтоб не блокировать event loop)
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
-    with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
-        for s in shorts:
-            fp = Path(s.get("filepath", ""))
-            if fp.exists():
-                zf.write(str(fp), arcname=s.get("filename", fp.name))
-    tmp.close()
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, functools.partial(_build_zip, tmp.name, valid))
+    print(f"[ZIP] Done, streaming {tmp.name}...")
 
     async def stream_file():
         with open(tmp.name, "rb") as f:
@@ -627,6 +633,15 @@ async def download_job_zip(job_id: str):
 
     return StreamingResponse(stream_file(), media_type="application/zip",
                               headers={"Content-Disposition": f'attachment; filename="shorts_{job_id}.zip"'})
+
+def _build_zip(path: str, shorts: list):
+    """Синхронная сборка ZIP (запускается в thread pool)"""
+    import zipfile
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+        for s in shorts:
+            fp = Path(s["filepath"])
+            if fp.exists():
+                zf.write(str(fp), arcname=s.get("filename", fp.name))
 
 
 # ── Admin ──

@@ -366,6 +366,7 @@ async function loadSettings() {
                 document.getElementById('subtitle-style').value = s.style || 'normal';
                 document.getElementById('subtitle-fontsize').value = s.fontsize || 100;
                 document.getElementById('subtitle-fontsize-val').textContent = s.fontsize || 100;
+                document.getElementById('subtitle-color').value = s.fontcolor || 'white';
                 document.getElementById('subtitle-position').value = s.position || 1670;
                 document.getElementById('subtitle-position-val').textContent = s.position || 1670;
                 document.getElementById('subtitle-borderw').value = s.borderw || 3;

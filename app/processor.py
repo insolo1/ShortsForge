@@ -13,9 +13,9 @@ def _read_env(key: str, default: str = "") -> str:
     if env_path.exists():
         try:
             text = env_path.read_text(encoding="utf-8")
-            m = re.search(rf"^{re.escape(key)}\s*=\s*'?([^'\n]*)'?\s*$", text, re.MULTILINE)
+            m = re.search(rf"^{re.escape(key)}\s*=\s*'?\"?([^'\n]*?)'?\"?\s*$", text, re.MULTILINE)
             if m:
-                return m.group(1).strip()
+                return m.group(1).strip().strip("'\"")
         except Exception:
             pass
     return default
@@ -429,46 +429,73 @@ class VideoProcessor:
         subtitle_shadowx = int(_read_env("SUBTITLE_SHADOW_X", "2"))
         subtitle_shadowy = int(_read_env("SUBTITLE_SHADOW_Y", "2"))
         subtitle_shadowcolor = _read_env("SUBTITLE_SHADOW_COLOR", "black")
-        subtitle_words_count = int(_read_env("SUBTITLE_WORDS_COUNT", "3"))
-        subtitle_word_fade = _read_env("SUBTITLE_WORD_FADE", "1") == "1"
         print(f"[SETTINGS] font={subtitle_font} size={subtitle_fontsize} pos={subtitle_position} borderw={subtitle_borderw} bordercolor={subtitle_bordercolor} shadow=({subtitle_shadowx},{subtitle_shadowy}) boxborder={subtitle_boxborder}")
         
-        segment_start = segment["start"]
         ass_path = None
-        subtitle_drawtext_filters = []
 
         if subtitle_segments:
-            esc_text = lambda t: t.replace("'", "'\\\\\\''").replace(":", "\\:").replace("%", "\\\\\\%")
-            font_file = self.fonts_dir / f"{subtitle_font}.ttf"
-            dt_font = f":fontfile={font_file}" if font_file.exists() else f":font={subtitle_font}"
-            dt_style = (
-                f"{dt_font}"
-                f":fontsize={subtitle_fontsize}"
-                f":fontcolor={subtitle_fontcolor}"
-                f":x=(w-text_w)/2"
-                f":y={subtitle_position}"
-            )
-            if subtitle_borderw > 0 and subtitle_bordercolor != "none":
-                dt_style += f":borderw={subtitle_borderw}:bordercolor={subtitle_bordercolor}"
-            if subtitle_shadowx > 0 or subtitle_shadowy > 0:
-                dt_style += f":shadowx={subtitle_shadowx}:shadowy={subtitle_shadowy}:shadowcolor={subtitle_shadowcolor}"
-            if subtitle_boxborder > 0 and subtitle_boxcolor != "none":
-                dt_style += f":box=1:boxborderw={subtitle_boxborder}:boxcolor={subtitle_boxcolor}"
-            if subtitle_style in ("bold", "bold_italic"):
-                dt_style += ":fontweight=700"
-            if subtitle_style in ("italic", "bold_italic"):
-                dt_style += ":fontstyle=italic"
+            # ASS + subtitles filter (стабильнее drawtext для 100+ слов)
+            ass_path = self.output_dir / f"subs_{job_id}_{index}.ass"
 
-            for seg in subtitle_segments:
-                start_t = max(0, seg['start'])
-                end_t = seg['end']
-                text = seg['text'].strip()
-                if subtitle_capitalize:
-                    text = text.capitalize()
-                text = esc_text(text)
-                subtitle_drawtext_filters.append(
-                    f"drawtext=text='{text}'{dt_style}:enable='between(t,{start_t},{end_t})'"
-                )
+            hex_rgb = self.color_to_hex(subtitle_fontcolor).replace('0x', '')
+            r, g, b = hex_rgb[0:2], hex_rgb[2:4], hex_rgb[4:6]
+            primary_color = f"&H00{b}{g}{r}&"
+
+            outline_rgb = self.color_to_hex(subtitle_bordercolor).replace('0x', '')
+            or_, og, ob = outline_rgb[0:2], outline_rgb[2:4], outline_rgb[4:6]
+            outline_color = f"&H00{ob}{og}{or_}&"
+
+            shadow_rgb = self.color_to_hex(subtitle_shadowcolor).replace('0x', '')
+            sr, sg, sb = shadow_rgb[0:2], shadow_rgb[2:4], shadow_rgb[4:6]
+            shadow_ass_color = f"&H00{sb}{sg}{sr}&"
+
+            bold_val = 1 if subtitle_style in ("bold", "bold_italic") else 0
+            italic_val = 1 if subtitle_style in ("italic", "bold_italic") else 0
+            outline_val = subtitle_borderw if subtitle_borderw > 0 and subtitle_bordercolor != "none" else 0
+            shadow_dist = max(subtitle_shadowx, subtitle_shadowy) if subtitle_shadowcolor != "none" else 0
+            margin_v = 1920 - subtitle_position
+
+            # Box background (BorderStyle=3)
+            if subtitle_boxborder > 0 and subtitle_boxcolor != "none":
+                border_style = 3
+                box_rgb = self.color_to_hex(subtitle_boxcolor.split('@')[0]).replace('0x', '')
+                br, bg_, bb = box_rgb[0:2], box_rgb[2:4], box_rgb[4:6]
+                if '@' in subtitle_boxcolor:
+                    alpha_val = min(255, int(float(subtitle_boxcolor.split('@')[1]) * 255))
+                    alpha_ass = f"{alpha_val:02X}"
+                else:
+                    alpha_ass = "80"
+                back_color = f"&H{alpha_ass}{bb}{bg_}{br}&"
+            else:
+                border_style = 1
+                back_color = shadow_ass_color
+
+            with open(ass_path, 'w', encoding='utf-8-sig') as f:
+                f.write('[Script Info]\n')
+                f.write('PlayResX: 1080\n')
+                f.write('PlayResY: 1920\n\n')
+                f.write('[V4+ Styles]\n')
+                f.write('Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n')
+                f.write(f'Style: Default,{subtitle_font},{subtitle_fontsize},{primary_color},&H000000FF,{outline_color},{back_color},{bold_val},{italic_val},0,0,100,100,0,0,{border_style},{outline_val},{shadow_dist},2,20,20,{margin_v},1\n\n')
+                f.write('[Events]\n')
+                f.write('Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n')
+
+                def fmt_ass(t):
+                    hours = int(t // 3600)
+                    minutes = int((t % 3600) // 60)
+                    seconds = int(t % 60)
+                    cs = int((t % 1) * 100)
+                    return f"{hours}:{minutes:02d}:{seconds:02d}.{cs:02d}"
+
+                for idx, seg in enumerate(subtitle_segments, 1):
+                    start_t = seg['start']
+                    end_t = seg['end']
+                    if start_t < 0:
+                        start_t = 0
+                    text = seg['text'].strip().replace('\\', r'\N')
+                    if subtitle_capitalize:
+                        text = text.capitalize()
+                    f.write(f'Dialogue: 0,{fmt_ass(start_t)},{fmt_ass(end_t)},Default,,0,0,0,,{text}\n')
 
         if crop_fill:
             if blurred_bg:
@@ -524,11 +551,10 @@ class VideoProcessor:
             video_preset = "ultrafast"
             video_quality = ["-crf", "18", "-threads", "0"]
         
-        # Добавляем drawtext субтитры (цепочка: каждый берёт vid_out и отдаёт vid_out)
-        if subtitle_drawtext_filters:
-            filter_chain += ";" + ";".join(
-                f"[vid_out]{f}[vid_out]" for f in subtitle_drawtext_filters
-            )
+        # ASS субтитры — один subtitles фильтр вместо цепочки drawtext
+        if ass_path and ass_path.exists():
+            ass_rel = os.path.relpath(ass_path, BASE_DIR).replace('\\', '/')
+            filter_chain += f";[vid_out]subtitles=filename={ass_rel}:fontsdir=fonts[vid_out]"
         
         loop = asyncio.get_event_loop()
 
@@ -542,6 +568,8 @@ class VideoProcessor:
         cmd += [
             "-t", str(segment["end"] - segment["start"]),
             "-filter_complex", filter_chain,
+            "-map", "[vid_out]",
+            "-map", "0:a?",
             "-c:v", video_codec,
         ]
         if video_preset:
@@ -560,7 +588,7 @@ class VideoProcessor:
         if result.returncode != 0:
             print(f"[FFMPEG] [{index}] Error: {result.returncode}")
             error_msg = result.stderr.decode('utf-8', errors='ignore') if result.stderr else 'None'
-            print(f"[FFMPEG] [{index}] stderr: {error_msg[:500]}")
+            print(f"[FFMPEG] [{index}] stderr: {error_msg[:2000]}")
             # Fallback на CPU если GPU кодировщик не сработал
             if self.gpu_encoder and video_codec != "libx264":
                 print(f"[FFMPEG] Retrying with libx264 (GPU encoder failed)...")
@@ -572,6 +600,8 @@ class VideoProcessor:
                 cmd += [
                     "-t", str(segment["end"] - segment["start"]),
                     "-filter_complex", filter_chain,
+                    "-map", "[vid_out]",
+                    "-map", "0:a?",
                     "-c:v", "libx264",
                     "-preset", "ultrafast",
                     "-crf", "18",
@@ -600,6 +630,22 @@ class VideoProcessor:
         else:
             print(f"[FFMPEG] File not created: {output_path}")
             return None
+
+    def _find_font(self, name: str):
+        """Ищет TTF файл шрифта: по имени, без пробелов, или первый попавшийся"""
+        candidates = [
+            self.fonts_dir / f"{name}.ttf",
+            self.fonts_dir / f"{name.replace(' ', '')}.ttf",
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+        # Fallback: первый TTF в папке
+        ttf_list = sorted(self.fonts_dir.glob("*.ttf"))
+        if ttf_list:
+            print(f"[FONT] '{name}.ttf' not found, using {ttf_list[0].name}")
+            return ttf_list[0]
+        return None
 
     def color_to_hex(self, color_name: str) -> str:
         """Convert color name to ASS hex string (without &H prefix)"""
