@@ -371,7 +371,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     // ── Авто-определение длительности видео ──
     function readFileVideoDuration(file, tab) {
         window._videoDurations[tab] = null;
-        if (!file || !file.type.startsWith('video/')) { updateEstimate(tab); return; }
+        if (!file) { updateEstimate(tab); return; }
         const objUrl = URL.createObjectURL(file);
         const v = document.createElement('video');
         v.preload = 'metadata';
@@ -394,6 +394,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                 const url = urlInput.value.trim();
                 window._videoDurations.url = null;
                 if (!url) { updateEstimate('url'); return; }
+                const box = document.getElementById('estimate-url');
+                if (box) box.innerHTML = '<div class="text-gray-400 text-xs">Проверяю длительность…</div>';
                 try {
                     const res = await fetch('/api/video-info?url=' + encodeURIComponent(url));
                     const data = await res.json();
