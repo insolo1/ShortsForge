@@ -227,8 +227,19 @@ document.addEventListener('DOMContentLoaded', async function() {
         off: 'Выкл — просто нарезка подряд',
         global: 'Топ — выбирает лучшие моменты из всего видео, но может пропустить концовку',
         parts: 'Сетка — равномерно покрывает всё видео, но локальный лучший может быть слабее',
-        hybrid: 'Гибрид — равномерное покрытие + финальный отбор только лучших'
+        hybrid: 'Гибрид — равномерное покрытие + финальный отбор только лучших',
+        auto_duration: 'Авто — программа сама выбирает длительность каждого лучшего момента (в заданном диапазоне)'
     };
+
+    function applyAutoDurationUI(tab, mode) {
+        const isAuto = mode === 'auto_duration';
+        const rangeRow = document.getElementById('auto-range-' + tab);
+        if (rangeRow) rangeRow.classList.toggle('hidden', !isAuto);
+        const lengthMap = { url: 'short-length', file: 'short-length-file', integration: 'integration-short-length' };
+        const len = document.getElementById(lengthMap[tab]);
+        if (len) len.disabled = isAuto;
+    }
+
     document.querySelectorAll('.smart-mode-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const tab = btn.dataset.tab;
@@ -241,11 +252,13 @@ document.addEventListener('DOMContentLoaded', async function() {
             btn.style.opacity = '1';
             const desc = document.getElementById('smart-desc-' + tab);
             if (desc) desc.textContent = smartDescs[mode] || '';
+            applyAutoDurationUI(tab, mode);
         });
         // init first as active
         if (btn.querySelector(':checked')) {
             btn.style.background = '#1F2937';
             btn.style.opacity = '1';
+            applyAutoDurationUI(btn.dataset.tab, btn.dataset.mode);
         }
     });
     
@@ -906,6 +919,8 @@ async function createShorts() {
         formData.append('short_length', shortLength);
         formData.append('shorts_count', shortsCount);
         formData.append('smart_selection', document.querySelector('input[name="smart-mode-url"]:checked')?.value || 'off');
+        formData.append('min_short_length', document.getElementById('auto-min-url')?.value || '30');
+        formData.append('max_short_length', document.getElementById('auto-max-url')?.value || '60');
         formData.append('blurred_bg', String(document.getElementById('blurred-bg-url')?.checked || false));
         formData.append('crop_fill', String(document.getElementById('crop-fill-url')?.checked || false));
         formData.append('save_video', String(document.getElementById('save-video-url')?.checked || false));
@@ -989,6 +1004,8 @@ async function createShortsFromFile() {
         formData.append('short_length', shortLength);
         formData.append('shorts_count', shortsCount);
         formData.append('smart_selection', document.querySelector('input[name="smart-mode-file"]:checked')?.value || 'off');
+        formData.append('min_short_length', document.getElementById('auto-min-file')?.value || '30');
+        formData.append('max_short_length', document.getElementById('auto-max-file')?.value || '60');
         formData.append('blurred_bg', String(document.getElementById('blurred-bg-file')?.checked || false));
         formData.append('crop_fill', String(document.getElementById('crop-fill-file')?.checked || false));
         formData.append('save_video', String(document.getElementById('save-video-file')?.checked || false));
@@ -1281,6 +1298,8 @@ async function startIntegration() {
         formData.append('save_folder', getSelectedSaveFolder('integration'));
         formData.append('crop_fill', String(document.getElementById('integration-crop-fill')?.checked || false));
         formData.append('smart_selection', document.querySelector('input[name="smart-mode-integration"]:checked')?.value || 'off');
+        formData.append('min_short_length', document.getElementById('auto-min-integration')?.value || '30');
+        formData.append('max_short_length', document.getElementById('auto-max-integration')?.value || '60');
 
         // Баннер
         const bInt = document.getElementById('banner-enabled-integration');
