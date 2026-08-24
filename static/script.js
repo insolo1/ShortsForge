@@ -332,7 +332,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         const autoTime = auto ? count * 3 : 0;                 // уточнение длительности
         const ai = count * 2;                                  // AI-метаданные
 
-        const perShort = (transcribeSeg + render) / count + ai / count + (auto ? 3 : 0);
+        const perSegment = (transcribeSeg + render) / count + ai / count + (auto ? 3 : 0);
+        // первый шортс включает одноразовый анализ всего видео
+        const firstShort = scan + perSegment;
         let total = transcribe + render + selection + autoTime + ai;
 
         // режим папки: несколько видео → умножаем общее время
@@ -346,7 +348,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         const countLabel = videosCount > 1 ? `${count} шт × ${videosCount} видео` : `${count} шт`;
 
         const parts = [];
-        if (scan > 0) parts.push('Анализ всего видео для поиска лучших моментов — ' + fmtTime(scan));
+        if (scan > 0) parts.push('Анализ всего видео для поиска моментов (один раз) — ' + fmtTime(scan));
         if (mode !== 'off') parts.push('Отбор лучших моментов (алгоритм) — ' + fmtTime(selection));
         if (transcribeSeg > 0) parts.push('Распознавание речи для субтитров (' + whisper + ') — ' + fmtTime(transcribeSeg));
         parts.push('Сборка видео — ' + fmtTime(render));
@@ -362,7 +364,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         box.innerHTML = `
             <div class="text-gray-400 text-xs mb-1">${durText}</div>
             <div class="text-gray-400 text-xs mb-1">Ориентировочно (${modeLabel}, ${countLabel}):</div>
-            <div class="text-purple-300 font-semibold">⏱ 1 шортс — ${fmtTime(perShort)}</div>
+            <div class="text-purple-300 font-semibold">⏱ Первый шортс (с анализом) — ${fmtTime(firstShort)}</div>
             <div class="text-gray-300 font-semibold">⏱ Всего — ${fmtTime(total)}</div>
             <div class="text-gray-500 text-xs mt-2">Что входит во время:</div>
             <div class="text-gray-500 text-xs space-y-0.5">${parts.map(p => '• ' + p).join('<br>')}</div>
