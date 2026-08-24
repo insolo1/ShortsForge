@@ -946,8 +946,14 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
         use_smart = (smart_selection or "off") != "off" or auto_duration
         full_subtitles = None
         if use_smart:
-            add_job_log(job_id, "Transcribing full video for smart selection...", "info")
-            full = loop.run_until_complete(processor.get_subtitles(video_path, 0, dur))
+            add_job_log(job_id, f"Transcribing full video for smart selection (Whisper: {_read_env('WHISPER_MODEL', 'base')})...", "info")
+            def _trans_progress(pct):
+                jobs[job_id]["progress"] = max(jobs[job_id].get("progress", 0), 5 + int(pct * 0.1))
+                save_jobs()
+                add_job_log(job_id, f"Transcribing full video... {pct}%", "progress")
+            full = loop.run_until_complete(
+                processor.get_subtitles(video_path, 0, dur, progress_cb=_trans_progress)
+            )
             full_subtitles = full.get("segments", [])
             add_job_log(job_id, f"Transcript ready: {len(full_subtitles)} words", "info")
 
@@ -1084,8 +1090,14 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
             use_smart = (smart_selection or "off") != "off" or auto_duration
             full_subtitles = None
             if use_smart:
-                add_job_log(job_id, f"[Video {vidx+1}] Transcribing full video for smart selection...", "info")
-                full = loop.run_until_complete(processor.get_subtitles(vpath, 0, dur))
+                add_job_log(job_id, f"[Video {vidx+1}] Transcribing full video for smart selection (Whisper: {_read_env('WHISPER_MODEL', 'base')})...", "info")
+                def _trans_progress(pct):
+                    jobs[job_id]["progress"] = max(jobs[job_id].get("progress", 0), 5 + int(pct * 0.1))
+                    save_jobs()
+                    add_job_log(job_id, f"[Video {vidx+1}] Transcribing full video... {pct}%", "progress")
+                full = loop.run_until_complete(
+                    processor.get_subtitles(vpath, 0, dur, progress_cb=_trans_progress)
+                )
                 full_subtitles = full.get("segments", [])
                 add_job_log(job_id, f"[Video {vidx+1}] Transcript ready: {len(full_subtitles)} words", "info")
 

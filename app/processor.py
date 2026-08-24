@@ -892,7 +892,7 @@ class VideoProcessor:
         }
         return colors.get(color_name, "0xFFFFFF")
     
-    async def get_subtitles(self, video_path: str, start: float, end: float, model_size: str = None, word_timestamps: bool = True):
+    async def get_subtitles(self, video_path: str, start: float, end: float, model_size: str = None, word_timestamps: bool = True, progress_cb=None):
         if model_size is None:
             model_size = _read_env("WHISPER_MODEL", "base")
         try:
@@ -947,6 +947,8 @@ class VideoProcessor:
                 print(f"[WHISPER] Unpacking result...")
                 segments_gen, info = result
                 print(f"[WHISPER] Got generator, starting iteration...")
+                total_sec = max(float(getattr(info, "duration", 0) or (end - start)), 1.0)
+                last_pct = [0]
                 
                 for seg in segments_gen:
                     text_parts.append(seg.text)
@@ -962,6 +964,12 @@ class VideoProcessor:
                                 "end": word.end,
                                 "text": word.word if hasattr(word, 'word') else str(word)
                             })
+                    # прогресс транскрипции (для длинных видео — видно, что не зависло)
+                    if progress_cb:
+                        pct = int(float(seg.end) / total_sec * 100)
+                        if pct - last_pct[0] >= 10:
+                            last_pct[0] = pct
+                            progress_cb(min(pct, 100))
                 
                 print(f"[WHISPER] Transcription done in {time.time()-start_transcribe:.1f}s, got {len(segments_list)} segments")
                 
