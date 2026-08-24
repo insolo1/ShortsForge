@@ -630,11 +630,6 @@ async function loadSettings() {
         const response = await fetch('/api/settings');
         const data = await response.json();
 
-        if (data.version) {
-            const verEl = document.getElementById('app-version');
-            if (verEl) verEl.textContent = data.version;
-        }
-
         if (data.status === 'success' && data.settings) {
             const s = data.settings;
             // Субтитры
