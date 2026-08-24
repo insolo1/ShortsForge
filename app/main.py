@@ -680,6 +680,21 @@ def _build_zip(path: str, shorts: list):
                 zf.write(str(fp), arcname=s.get("filename", fp.name))
 
 
+async def _save_banner_upload(banner_file, job_id: str) -> str:
+    """Сохраняет загруженный баннер (изображение или видео) в BANNER_DIR."""
+    if not banner_file or not banner_file.filename:
+        return None
+    ext = Path(banner_file.filename).suffix or ".png"
+    path = BANNER_DIR / f"banner_{job_id}{ext}"
+    with open(path, "wb") as f:
+        while True:
+            chunk = await banner_file.read(1024 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+    return str(path)
+
+
 # ── Admin ──
 @app.get("/api/admin/analytics")
 async def analytics():
@@ -888,7 +903,9 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                         save_video: bool, save_folder: str,
                         banner_enabled: bool, banner_x: int, banner_y: int,
                         banner_w: int, banner_h: int, banner_opacity: int,
-                        filename_keywords: str = ""):
+                        filename_keywords: str = "",
+                        banner_path: str = None, banner_style: str = "overlay",
+                        banner_position: int = 50, banner_duration: int = 3):
     """Run processing in a thread, updating jobs + job_logs"""
     import asyncio
     loop = asyncio.new_event_loop()
@@ -923,8 +940,9 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                     video_path, seg, i, job_id,
                     subtitle_data.get("segments"),
                     blurred_bg, filename_keywords, crop_fill,
-                    banner_enabled, None, banner_x, banner_y,
-                    banner_w, banner_h, banner_opacity
+                    banner_enabled, banner_path, banner_x, banner_y,
+                    banner_w, banner_h, banner_opacity,
+                    banner_style, banner_position, banner_duration
                 )
             )
 
@@ -981,7 +999,9 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                            save_video: bool, save_folder: str,
                            banner_enabled: bool, banner_x: int, banner_y: int,
                            banner_w: int, banner_h: int, banner_opacity: int,
-                           filename_keywords: str = ""):
+                           filename_keywords: str = "",
+                           banner_path: str = None, banner_style: str = "overlay",
+                           banner_position: int = 50, banner_duration: int = 3):
     """Process multiple videos, distributing shorts_count across them"""
     import asyncio
     import math
@@ -1031,8 +1051,9 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                         vpath, seg, idx, job_id,
                         subtitle_data.get("segments"),
                         blurred_bg, filename_keywords, crop_fill,
-                        banner_enabled, None, banner_x, banner_y,
-                        banner_w, banner_h, banner_opacity
+                        banner_enabled, banner_path, banner_x, banner_y,
+                        banner_w, banner_h, banner_opacity,
+                        banner_style, banner_position, banner_duration
                     )
                 )
 
@@ -1095,10 +1116,14 @@ async def upload_url(
     banner_enabled: bool = Form(False),
     banner_x: int = Form(0), banner_y: int = Form(0),
     banner_w: int = Form(1080), banner_h: int = Form(200), banner_opacity: int = Form(100),
+    banner_file: UploadFile = File(None),
+    banner_style: str = Form("overlay"),
+    banner_position: int = Form(50), banner_duration: int = Form(3),
     filename_keywords: str = Form("")
 ):
     job_id = str(uuid.uuid4())
     now_str = time.strftime('%Y-%m-%d %H:%M:%S')
+    banner_path = await _save_banner_upload(banner_file, job_id)
     jobs[job_id] = {"id": job_id, "status": "queued", "progress": 0,
                      "shorts_count": shorts_count, "short_length": short_length,
                      "source": "url", "created_at": now_str, "shorts": []}
@@ -1122,7 +1147,8 @@ async def upload_url(
                 save_video, save_folder,
                 banner_enabled, banner_x, banner_y,
                 banner_w, banner_h, banner_opacity,
-                filename_keywords
+                filename_keywords,
+                banner_path, banner_style, banner_position, banner_duration
             )
         except Exception as e:
             jobs[job_id]["status"] = "failed"
@@ -1149,11 +1175,15 @@ async def upload_file(
     banner_enabled: bool = Form(False),
     banner_x: int = Form(0), banner_y: int = Form(0),
     banner_w: int = Form(1080), banner_h: int = Form(200), banner_opacity: int = Form(100),
+    banner_file: UploadFile = File(None),
+    banner_style: str = Form("overlay"),
+    banner_position: int = Form(50), banner_duration: int = Form(3),
     filename_keywords: str = Form("")
 ):
     job_id = str(uuid.uuid4())
     safe = f"{job_id}_input.mp4"
     video_path = str(UPLOAD_DIR / safe)
+    banner_path = await _save_banner_upload(banner_file, job_id)
 
     file_size = 0
     with open(video_path, "wb") as f:
@@ -1179,7 +1209,8 @@ async def upload_file(
         save_video, save_folder,
         banner_enabled, banner_x, banner_y,
         banner_w, banner_h, banner_opacity,
-        filename_keywords
+        filename_keywords,
+        banner_path, banner_style, banner_position, banner_duration
     ))
 
     return {"job_id": job_id, "status": "started" if started else "queued"}
@@ -1198,10 +1229,14 @@ async def upload_folder(
     banner_enabled: bool = Form(False),
     banner_x: int = Form(0), banner_y: int = Form(0),
     banner_w: int = Form(1080), banner_h: int = Form(200), banner_opacity: int = Form(100),
+    banner_file: UploadFile = File(None),
+    banner_style: str = Form("overlay"),
+    banner_position: int = Form(50), banner_duration: int = Form(3),
     filename_keywords: str = Form("")
 ):
     job_id = str(uuid.uuid4())
     now_str = time.strftime('%Y-%m-%d %H:%M:%S')
+    banner_path = await _save_banner_upload(banner_file, job_id)
     jobs[job_id] = {"id": job_id, "status": "queued", "progress": 0,
                      "shorts_count": shorts_count, "short_length": short_length,
                      "source": "folder", "created_at": now_str, "shorts": []}
@@ -1229,7 +1264,8 @@ async def upload_folder(
         save_video, save_folder,
         banner_enabled, banner_x, banner_y,
         banner_w, banner_h, banner_opacity,
-        filename_keywords
+        filename_keywords,
+        banner_path, banner_style, banner_position, banner_duration
     ))
 
     return {"job_id": job_id, "status": "started" if started else "queued"}
