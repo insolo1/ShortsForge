@@ -174,9 +174,11 @@ class VideoProcessor:
 
     def _base_segments(self, duration: float, short_length: int, shorts_count: int, subtitle_segments: List[Dict], video_path: str, mode: str) -> List[Dict]:
         """Выбирает сегменты базовым способом (off / density / нейросетевой)."""
-        if mode in ("global", "parts", "hybrid", "true", "1") and subtitle_segments:
-            return self._find_best_segments_nn(duration, short_length, shorts_count, subtitle_segments, video_path)
         if subtitle_segments:
+            if mode in ("global", "parts", "hybrid", "true", "1") and duration > 7200:
+                # очень длинные видео — нейросетевой скоринг (InterestNet)
+                return self._find_best_segments_nn(duration, short_length, shorts_count, subtitle_segments, video_path)
+            # стандартный отбор по плотности речи
             return self._find_best_segments(duration, short_length, shorts_count, subtitle_segments)
         segments = []
         for i in range(min(shorts_count, int(duration // short_length))):

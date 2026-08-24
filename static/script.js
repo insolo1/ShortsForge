@@ -310,7 +310,8 @@ document.addEventListener('DOMContentLoaded', async function() {
         const mode = getTabMode(tab);
 
         const wf = WHISPER_FACTORS[whisper] || 1;
-        const transcribe = count * segLen * 0.1 * wf;          // Whisper на GPU
+        const smart = mode !== 'off' || auto;
+        const transcribe = smart ? videoSec * 0.1 * wf : count * segLen * 0.1 * wf;  // смарт — транскрипция всего видео
         const render = count * segLen * 0.25;                  // ffmpeg (NVENC + blur + субтитры)
         const selection = mode === 'off' ? 0 : videoSec * 0.25 + 30;  // нейросетевой отбор по всему видео
         const autoTime = auto ? count * 3 : 0;                 // уточнение длительности

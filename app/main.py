@@ -942,9 +942,19 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
         dur = video_info.get("duration", 0)
         add_job_log(job_id, f"Duration: {dur:.1f}s", "info")
 
+        # Для выбора лучших моментов транскрибируем видео целиком (один раз)
+        use_smart = (smart_selection or "off") != "off" or auto_duration
+        full_subtitles = None
+        if use_smart:
+            add_job_log(job_id, "Transcribing full video for smart selection...", "info")
+            full = loop.run_until_complete(processor.get_subtitles(video_path, 0, dur))
+            full_subtitles = full.get("segments", [])
+            add_job_log(job_id, f"Transcript ready: {len(full_subtitles)} words", "info")
+
         segments = loop.run_until_complete(
             processor.extract_segments(
                 video_path, short_length, shorts_count,
+                subtitle_segments=full_subtitles,
                 smart_selection=smart_selection,
                 auto_duration=auto_duration,
                 min_length=min_short_length, max_length=max_short_length
@@ -959,15 +969,28 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                 break
             add_job_log(job_id, f"[{i+1}/{len(segments)}] Processing {seg['start']:.1f}s-{seg['end']:.1f}s", "progress")
 
-            subtitle_data = loop.run_until_complete(
-                processor.get_subtitles(video_path, seg["start"], seg["end"])
-            )
-            add_job_log(job_id, f"[{i+1}/{len(segments)}] Subtitles: {len(subtitle_data.get('segments', []))} phrases", "info")
+            if use_smart and full_subtitles:
+                # режем полную транскрипцию под сегмент (без повторной транскрипции)
+                seg_subtitles = []
+                for w in full_subtitles:
+                    if w.get("end", 0) >= seg["start"] and w.get("start", 0) <= seg["end"]:
+                        seg_subtitles.append({
+                            "start": max(0.0, w["start"] - seg["start"]),
+                            "end": min(seg["end"] - seg["start"], w["end"] - seg["start"]),
+                            "text": w.get("text", "")
+                        })
+                subtitle_segments = seg_subtitles
+            else:
+                subtitle_data = loop.run_until_complete(
+                    processor.get_subtitles(video_path, seg["start"], seg["end"])
+                )
+                subtitle_segments = subtitle_data.get("segments", [])
+            add_job_log(job_id, f"[{i+1}/{len(segments)}] Subtitles: {len(subtitle_segments)} words", "info")
 
             short_path = loop.run_until_complete(
                 processor.create_short(
                     video_path, seg, i, job_id,
-                    subtitle_data.get("segments"),
+                    subtitle_segments,
                     blurred_bg, filename_keywords, crop_fill,
                     banner_enabled, banner_path, banner_x, banner_y,
                     banner_w, banner_h, banner_opacity,
@@ -1058,9 +1081,18 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
             dur = video_info.get("duration", 0)
             add_job_log(job_id, f"[Video {vidx+1}] Duration: {dur:.1f}s", "info")
 
+            use_smart = (smart_selection or "off") != "off" or auto_duration
+            full_subtitles = None
+            if use_smart:
+                add_job_log(job_id, f"[Video {vidx+1}] Transcribing full video for smart selection...", "info")
+                full = loop.run_until_complete(processor.get_subtitles(vpath, 0, dur))
+                full_subtitles = full.get("segments", [])
+                add_job_log(job_id, f"[Video {vidx+1}] Transcript ready: {len(full_subtitles)} words", "info")
+
             segments = loop.run_until_complete(
                 processor.extract_segments(
                     vpath, short_length, per_video,
+                    subtitle_segments=full_subtitles,
                     smart_selection=smart_selection,
                     auto_duration=auto_duration,
                     min_length=min_short_length, max_length=max_short_length
@@ -1077,15 +1109,27 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                 idx = total_made
                 add_job_log(job_id, f"[{idx+1}/{shorts_count}] Processing {seg['start']:.1f}s-{seg['end']:.1f}s", "progress")
 
-                subtitle_data = loop.run_until_complete(
-                    processor.get_subtitles(vpath, seg["start"], seg["end"])
-                )
-                add_job_log(job_id, f"[{idx+1}/{shorts_count}] Subtitles: {len(subtitle_data.get('segments', []))} phrases", "info")
+                if use_smart and full_subtitles:
+                    seg_subtitles = []
+                    for w in full_subtitles:
+                        if w.get("end", 0) >= seg["start"] and w.get("start", 0) <= seg["end"]:
+                            seg_subtitles.append({
+                                "start": max(0.0, w["start"] - seg["start"]),
+                                "end": min(seg["end"] - seg["start"], w["end"] - seg["start"]),
+                                "text": w.get("text", "")
+                            })
+                    subtitle_segments = seg_subtitles
+                else:
+                    subtitle_data = loop.run_until_complete(
+                        processor.get_subtitles(vpath, seg["start"], seg["end"])
+                    )
+                    subtitle_segments = subtitle_data.get("segments", [])
+                add_job_log(job_id, f"[{idx+1}/{shorts_count}] Subtitles: {len(subtitle_segments)} words", "info")
 
                 short_path = loop.run_until_complete(
                     processor.create_short(
                         vpath, seg, idx, job_id,
-                        subtitle_data.get("segments"),
+                        subtitle_segments,
                         blurred_bg, filename_keywords, crop_fill,
                         banner_enabled, banner_path, banner_x, banner_y,
                         banner_w, banner_h, banner_opacity,
