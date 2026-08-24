@@ -1792,6 +1792,7 @@ function applyBannerPreview(bannerImg, bannerVideo, bannerLayer, isVideo) {
     el.style.position = 'absolute';
     el.style.left = Math.round(bx * scaleW) + 'px';
     el.style.top = Math.round(by * scaleH) + 'px';
+    el.style.objectFit = 'fill';
     el.style.opacity = op / 100;
     el.style.display = 'block';
     other.style.display = 'none';
