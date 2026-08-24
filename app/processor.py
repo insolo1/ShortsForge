@@ -596,7 +596,7 @@ class VideoProcessor:
             return 0
 
     
-    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False, banner_enabled: bool = False, banner_path: str = None, banner_x: int = 0, banner_y: int = 0, banner_w: int = 1080, banner_h: int = 200, banner_opacity: int = 100, banner_style: str = "overlay", banner_position: int = 50, banner_duration: int = 3, banner_full_duration: bool = False, banner_audio_enabled: bool = False) -> str:
+    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False, banner_enabled: bool = False, banner_path: str = None, banner_x: int = 0, banner_y: int = 0, banner_w: int = 1080, banner_h: int = 200, banner_opacity: int = 100, banner_style: str = "overlay", banner_position: int = 50, banner_duration: int = 3, banner_full_duration: bool = False) -> str:
         kw_part = f"_{filename_keywords}" if filename_keywords else ""
         output_path = self.output_dir / f"short_{job_id}_{index}{kw_part}.mp4"
 
@@ -742,7 +742,7 @@ class VideoProcessor:
                 "[va][vb][vc]concat=n=3:v=1:a=0[vid]",
             ]
             has_audio = await self._has_audio(video_path)
-            banner_audio = banner_is_video and banner_audio_enabled and await self._has_audio(banner_path)
+            banner_audio = banner_is_video and await self._has_audio(banner_path)
             if has_audio:
                 # пауза: видео замирает, а на время баннера звучит аудио баннера (если это MP4)
                 chain_parts.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{T},asetpts=N/SR/TB[aA]")

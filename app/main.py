@@ -1007,7 +1007,7 @@ def _process_one_segment(job_id, video_path, seg_index, seg, total,
                          use_smart, full_subtitles, whisper_model,
                          blurred_bg, filename_keywords, crop_fill,
                          banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity,
-                         banner_style, banner_position, banner_duration, banner_full_duration, banner_audio_enabled,
+                         banner_style, banner_position, banner_duration, banner_full_duration,
                          save_video, save_folder):
     """РћР±СЂР°Р±Р°С‚С‹РІР°РµС‚ РѕРґРёРЅ СЃРµРіРјРµРЅС‚ РІ РѕС‚РґРµР»СЊРЅРѕРј РїРѕС‚РѕРєРµ. Р’РѕР·РІСЂР°С‰Р°РµС‚ (index, short_path) РёР»Рё None."""
     import asyncio
@@ -1052,7 +1052,7 @@ def _process_one_segment(job_id, video_path, seg_index, seg, total,
                 banner_enabled, banner_path, banner_x, banner_y,
                 banner_w, banner_h, banner_opacity,
                 banner_style, banner_position, banner_duration,
-                banner_full_duration, banner_audio_enabled
+                banner_full_duration
             )
         )
         if not short_path or not Path(short_path).exists():
@@ -1078,7 +1078,7 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                         banner_path: str = None, banner_style: str = "overlay",
                         banner_position: int = 50, banner_duration: int = 3,
                         banner_full_duration: bool = False,
-                        banner_audio_enabled: bool = False,
+
                         min_short_length: int = 30, max_short_length: int = 60,
                         auto_duration: bool = False):
     """Run processing in a thread, updating jobs + job_logs"""
@@ -1123,7 +1123,7 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
         _seg_args = (use_smart, full_subtitles, whisper_model,
                      blurred_bg, filename_keywords, crop_fill,
                      banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity,
-                     banner_style, banner_position, banner_duration, banner_full_duration, banner_audio_enabled,
+                     banner_style, banner_position, banner_duration, banner_full_duration,
                      save_video, save_folder)
 
         results = []
@@ -1194,7 +1194,7 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                            banner_path: str = None, banner_style: str = "overlay",
                            banner_position: int = 50, banner_duration: int = 3,
                            banner_full_duration: bool = False,
-                           banner_audio_enabled: bool = False,
+   
                            min_short_length: int = 30, max_short_length: int = 60,
                            auto_duration: bool = False):
     """Process multiple videos, distributing shorts_count across them"""
@@ -1384,7 +1384,7 @@ async def upload_file(
         banner_w, banner_h, banner_opacity,
         filename_keywords,
         banner_path, banner_style, banner_position, banner_duration,
-        banner_full_duration, banner_audio_enabled,
+        banner_full_duration,
         min_short_length, max_short_length, auto_duration
     ))
 
@@ -1444,7 +1444,7 @@ async def upload_folder(
         banner_w, banner_h, banner_opacity,
         filename_keywords,
         banner_path, banner_style, banner_position, banner_duration,
-        banner_full_duration, banner_audio_enabled,
+        banner_full_duration,
         min_short_length, max_short_length, auto_duration
     ))
 

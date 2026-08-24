@@ -1131,7 +1131,6 @@ async function createShortsFromFile() {
             formData.append('banner_position', document.getElementById('banner-position-settings')?.value || '50');
             formData.append('banner_duration', document.getElementById('banner-duration-settings')?.value || '3');
             formData.append('banner_full_duration', String(document.getElementById('banner-full-duration')?.checked || false));
-            formData.append('banner_audio_enabled', String(document.getElementById('banner-audio-enabled')?.checked || false));
             const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
             if (bannerFile) formData.append('banner_file', bannerFile);
         }
@@ -1422,7 +1421,6 @@ async function startIntegration() {
             formData.append('banner_position', document.getElementById('banner-position-settings')?.value || '50');
             formData.append('banner_duration', document.getElementById('banner-duration-settings')?.value || '3');
             formData.append('banner_full_duration', String(document.getElementById('banner-full-duration')?.checked || false));
-            formData.append('banner_audio_enabled', String(document.getElementById('banner-audio-enabled')?.checked || false));
             const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
             if (bannerFile) formData.append('banner_file', bannerFile);
         }
