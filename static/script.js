@@ -312,8 +312,8 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         const wf = WHISPER_FACTORS[whisper] || 1;
         const smart = mode !== 'off' || auto;
-        // сканирование всего видео для отбора — всегда base (фактор 1)
-        const scan = smart ? videoSec * 0.1 : 0;
+        // сканирование всего видео для отбора — всегда base, ~0.2с/с на этой машине (замер)
+        const scan = smart ? videoSec * 0.2 : 0;
         // субтитры сегментов выбранной моделью (base-скан переиспользуется для base-модели)
         const transcribeSeg = (smart && whisper === 'base') ? 0 : count * segLen * 0.1 * wf;
         const transcribe = scan + transcribeSeg;
@@ -349,13 +349,15 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (auto) parts.push('Подбор длительности — ' + fmtTime(autoTime));
         parts.push('Метаданные AI — ' + fmtTime(ai));
 
+        const modeLabel = (mode === 'off' ? 'простая нарезка' : mode) + (auto ? ' + авто-длительность' : '');
+
         const durText = knownDur
             ? 'Длительность видео: ' + fmtTime(knownDur)
             : (tab === 'file' ? 'Длительность определится после выбора файла' : 'Длительность определится после ввода ссылки');
 
         box.innerHTML = `
             <div class="text-gray-400 text-xs mb-1">${durText}</div>
-            <div class="text-gray-400 text-xs mb-1">Ориентировочно (${mode === 'off' ? 'простая нарезка' : mode}, ${countLabel}):</div>
+            <div class="text-gray-400 text-xs mb-1">Ориентировочно (${modeLabel}, ${countLabel}):</div>
             <div class="text-purple-300 font-semibold">⏱ 1 шортс — ${fmtTime(perShort)}</div>
             <div class="text-gray-300 font-semibold">⏱ Всего — ${fmtTime(total)}</div>
             <div class="text-gray-500 text-xs mt-2">Что входит во время:</div>
@@ -1112,6 +1114,7 @@ async function createShorts() {
             formData.append('banner_style', document.getElementById('banner-style-settings')?.value || 'overlay');
             formData.append('banner_position', document.getElementById('banner-position-settings')?.value || '50');
             formData.append('banner_duration', document.getElementById('banner-duration-settings')?.value || '3');
+            formData.append('banner_full_duration', String(document.getElementById('banner-full-duration')?.checked || false));
             const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
             if (bannerFile) formData.append('banner_file', bannerFile);
         }
@@ -1198,6 +1201,7 @@ async function createShortsFromFile() {
             formData.append('banner_style', document.getElementById('banner-style-settings')?.value || 'overlay');
             formData.append('banner_position', document.getElementById('banner-position-settings')?.value || '50');
             formData.append('banner_duration', document.getElementById('banner-duration-settings')?.value || '3');
+            formData.append('banner_full_duration', String(document.getElementById('banner-full-duration')?.checked || false));
             const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
             if (bannerFile) formData.append('banner_file', bannerFile);
         }
@@ -1488,6 +1492,7 @@ async function startIntegration() {
             formData.append('banner_style', document.getElementById('banner-style-settings')?.value || 'overlay');
             formData.append('banner_position', document.getElementById('banner-position-settings')?.value || '50');
             formData.append('banner_duration', document.getElementById('banner-duration-settings')?.value || '3');
+            formData.append('banner_full_duration', String(document.getElementById('banner-full-duration')?.checked || false));
             const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
             if (bannerFile) formData.append('banner_file', bannerFile);
         }

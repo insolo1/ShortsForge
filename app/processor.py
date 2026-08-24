@@ -174,19 +174,16 @@ class VideoProcessor:
 
     def _base_segments(self, duration: float, short_length: int, shorts_count: int, subtitle_segments: List[Dict], video_path: str, mode: str) -> List[Dict]:
         """Выбирает сегменты базовым способом (off / density / нейросетевой)."""
+        if mode not in ("global", "parts", "hybrid", "true", "1"):
+            # off — простое деление подряд
+            return self._default_segments(duration, short_length, shorts_count)
         if subtitle_segments:
-            if mode in ("global", "parts", "hybrid", "true", "1") and duration > 7200:
+            if duration > 7200:
                 # очень длинные видео — нейросетевой скоринг (InterestNet)
                 return self._find_best_segments_nn(duration, short_length, shorts_count, subtitle_segments, video_path)
             # стандартный отбор по плотности речи
             return self._find_best_segments(duration, short_length, shorts_count, subtitle_segments)
-        segments = []
-        for i in range(min(shorts_count, int(duration // short_length))):
-            start = i * short_length
-            end = min(start + short_length, duration)
-            segments.append({"start": start, "end": end})
-        print(f"[PROCESS] Found {len(segments)} segments")
-        return segments
+        return self._default_segments(duration, short_length, shorts_count)
 
     def _score_window_interest(self, phrases: List[Dict], p_starts: List[float], start: float, end: float) -> float:
         """0-100: насколько интересно окно [start,end] по речи (плотность, эмоции, темп)."""
@@ -587,7 +584,7 @@ class VideoProcessor:
             return False
 
     
-    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False, banner_enabled: bool = False, banner_path: str = None, banner_x: int = 0, banner_y: int = 0, banner_w: int = 1080, banner_h: int = 200, banner_opacity: int = 100, banner_style: str = "overlay", banner_position: int = 50, banner_duration: int = 3) -> str:
+    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False, banner_enabled: bool = False, banner_path: str = None, banner_x: int = 0, banner_y: int = 0, banner_w: int = 1080, banner_h: int = 200, banner_opacity: int = 100, banner_style: str = "overlay", banner_position: int = 50, banner_duration: int = 3, banner_full_duration: bool = False) -> str:
         kw_part = f"_{filename_keywords}" if filename_keywords else ""
         output_path = self.output_dir / f"short_{job_id}_{index}{kw_part}.mp4"
 
@@ -682,6 +679,11 @@ class VideoProcessor:
             pos_pct = max(0.0, min(100.0, float(banner_position if banner_position is not None else 50))) / 100.0
             T = segdur * pos_pct
             D = max(1.0, min(float(banner_duration if banner_duration is not None else 3), max(1.0, segdur - 1.0)))
+            # видео-баннер: можно показывать столько, сколько длится сам MP4
+            if banner_full_duration and Path(banner_path).suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"):
+                mp4_dur = await self.get_duration(banner_path)
+                if mp4_dur and mp4_dur > 0:
+                    D = max(1.0, min(float(mp4_dur), max(1.0, segdur - 1.0)))
             if T < 1.0:
                 T = min(1.0, segdur / 2.0)
             if segdur - T < 1.0:

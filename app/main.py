@@ -928,6 +928,7 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                         filename_keywords: str = "",
                         banner_path: str = None, banner_style: str = "overlay",
                         banner_position: int = 50, banner_duration: int = 3,
+                        banner_full_duration: bool = False,
                         min_short_length: int = 30, max_short_length: int = 60,
                         auto_duration: bool = False):
     """Run processing in a thread, updating jobs + job_logs"""
@@ -1002,7 +1003,8 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                     blurred_bg, filename_keywords, crop_fill,
                     banner_enabled, banner_path, banner_x, banner_y,
                     banner_w, banner_h, banner_opacity,
-                    banner_style, banner_position, banner_duration
+                    banner_style, banner_position, banner_duration,
+                    banner_full_duration
                 )
             )
 
@@ -1062,6 +1064,7 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                            filename_keywords: str = "",
                            banner_path: str = None, banner_style: str = "overlay",
                            banner_position: int = 50, banner_duration: int = 3,
+                           banner_full_duration: bool = False,
                            min_short_length: int = 30, max_short_length: int = 60,
                            auto_duration: bool = False):
     """Process multiple videos, distributing shorts_count across them"""
@@ -1148,7 +1151,8 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                         blurred_bg, filename_keywords, crop_fill,
                         banner_enabled, banner_path, banner_x, banner_y,
                         banner_w, banner_h, banner_opacity,
-                        banner_style, banner_position, banner_duration
+                        banner_style, banner_position, banner_duration,
+                        banner_full_duration
                     )
                 )
 
@@ -1214,6 +1218,7 @@ async def upload_url(
     banner_file: UploadFile = File(None),
     banner_style: str = Form("overlay"),
     banner_position: int = Form(50), banner_duration: int = Form(3),
+    banner_full_duration: bool = Form(False),
     min_short_length: int = Form(30), max_short_length: int = Form(60),
     auto_duration: bool = Form(False),
     filename_keywords: str = Form("")
@@ -1246,6 +1251,7 @@ async def upload_url(
                 banner_w, banner_h, banner_opacity,
                 filename_keywords,
                 banner_path, banner_style, banner_position, banner_duration,
+                banner_full_duration,
                 min_short_length, max_short_length, auto_duration
             )
         except Exception as e:
@@ -1276,6 +1282,7 @@ async def upload_file(
     banner_file: UploadFile = File(None),
     banner_style: str = Form("overlay"),
     banner_position: int = Form(50), banner_duration: int = Form(3),
+    banner_full_duration: bool = Form(False),
     min_short_length: int = Form(30), max_short_length: int = Form(60),
     auto_duration: bool = Form(False),
     filename_keywords: str = Form("")
@@ -1311,6 +1318,7 @@ async def upload_file(
         banner_w, banner_h, banner_opacity,
         filename_keywords,
         banner_path, banner_style, banner_position, banner_duration,
+        banner_full_duration,
         min_short_length, max_short_length, auto_duration
     ))
 
@@ -1333,6 +1341,7 @@ async def upload_folder(
     banner_file: UploadFile = File(None),
     banner_style: str = Form("overlay"),
     banner_position: int = Form(50), banner_duration: int = Form(3),
+    banner_full_duration: bool = Form(False),
     min_short_length: int = Form(30), max_short_length: int = Form(60),
     auto_duration: bool = Form(False),
     filename_keywords: str = Form("")
@@ -1369,6 +1378,7 @@ async def upload_folder(
         banner_w, banner_h, banner_opacity,
         filename_keywords,
         banner_path, banner_style, banner_position, banner_duration,
+        banner_full_duration,
         min_short_length, max_short_length, auto_duration
     ))
 
