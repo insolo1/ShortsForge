@@ -347,6 +347,17 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
         }
     });
+
+    // Показ/скрытие настроек паузы баннера
+    const bannerStyleSel = document.getElementById('banner-style-settings');
+    const bannerPauseRow = document.getElementById('banner-pause-settings');
+    if (bannerStyleSel && bannerPauseRow) {
+        const syncBannerStyle = () => {
+            bannerPauseRow.classList.toggle('hidden', bannerStyleSel.value !== 'pause');
+        };
+        bannerStyleSel.addEventListener('change', syncBannerStyle);
+        syncBannerStyle();
+    }
     
     loadSaveFolders();
     
@@ -910,6 +921,9 @@ async function createShorts() {
             formData.append('banner_w', document.getElementById('banner-w-settings')?.value || '1080');
             formData.append('banner_h', document.getElementById('banner-h-settings')?.value || '200');
             formData.append('banner_opacity', document.getElementById('banner-opacity-settings')?.value || '100');
+            formData.append('banner_style', document.getElementById('banner-style-settings')?.value || 'overlay');
+            formData.append('banner_position', document.getElementById('banner-position-settings')?.value || '50');
+            formData.append('banner_duration', document.getElementById('banner-duration-settings')?.value || '3');
             const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
             if (bannerFile) formData.append('banner_file', bannerFile);
         }
@@ -990,6 +1004,9 @@ async function createShortsFromFile() {
             formData.append('banner_w', document.getElementById('banner-w-settings')?.value || '1080');
             formData.append('banner_h', document.getElementById('banner-h-settings')?.value || '200');
             formData.append('banner_opacity', document.getElementById('banner-opacity-settings')?.value || '100');
+            formData.append('banner_style', document.getElementById('banner-style-settings')?.value || 'overlay');
+            formData.append('banner_position', document.getElementById('banner-position-settings')?.value || '50');
+            formData.append('banner_duration', document.getElementById('banner-duration-settings')?.value || '3');
             const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
             if (bannerFile) formData.append('banner_file', bannerFile);
         }
@@ -1274,6 +1291,9 @@ async function startIntegration() {
             formData.append('banner_w', document.getElementById('banner-w-settings')?.value || '1080');
             formData.append('banner_h', document.getElementById('banner-h-settings')?.value || '200');
             formData.append('banner_opacity', document.getElementById('banner-opacity-settings')?.value || '100');
+            formData.append('banner_style', document.getElementById('banner-style-settings')?.value || 'overlay');
+            formData.append('banner_position', document.getElementById('banner-position-settings')?.value || '50');
+            formData.append('banner_duration', document.getElementById('banner-duration-settings')?.value || '3');
             const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
             if (bannerFile) formData.append('banner_file', bannerFile);
         }

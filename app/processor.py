@@ -412,8 +412,87 @@ class VideoProcessor:
             end = min(start + short_length, duration)
             segments.append({"start": start, "end": end})
         return segments
+
+    def _bg_filter_chain(self, in_label: str, out_label: str, crop_fill: bool, blurred_bg: bool, suffix: str = "") -> str:
+        """Строит цепочку фоновой обработки (кадрирование/blur/пады) in_label -> out_label."""
+        s = suffix
+        if crop_fill:
+            return (
+                f"{in_label}split=2[bg_in{s}][fg_in{s}];"
+                f"[bg_in{s}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg{s}];"
+                f"[fg_in{s}]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg{s}];"
+                f"[bg{s}][fg{s}]overlay=0:(H-h)/2,format=yuv420p[{out_label}]"
+            )
+        if blurred_bg:
+            return (
+                f"{in_label}split=2[bg_in{s}][fg_in{s}];"
+                f"[bg_in{s}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg{s}];"
+                f"[fg_in{s}]scale=1080:-1[fg{s}];"
+                f"[bg{s}][fg{s}]overlay=0:(H-h)/2,format=yuv420p[{out_label}]"
+            )
+        return f"{in_label}scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,format=yuv420p[{out_label}]"
+
+    @staticmethod
+    def _ass_time(t: float) -> str:
+        hours = int(t // 3600)
+        minutes = int((t % 3600) // 60)
+        seconds = int(t % 60)
+        cs = int((t % 1) * 100)
+        return f"{hours}:{minutes:02d}:{seconds:02d}.{cs:02d}"
+
+    @staticmethod
+    def _parse_ass_time(t: str) -> float:
+        parts = t.split(":")
+        h, m, s = int(parts[0]), int(parts[1]), float(parts[2])
+        return h * 3600 + m * 60 + s
+
+    def _shift_ass_times(self, ass_path, shift_after: float, shift_by: float):
+        """Сдвигает тайминги ASS-событий, начинающихся после shift_after, на shift_by секунд."""
+        if not ass_path or not ass_path.exists() or shift_by <= 0:
+            return
+        try:
+            text = ass_path.read_text(encoding="utf-8-sig")
+            lines = text.split("\n")
+            out = []
+            for line in lines:
+                if line.startswith("Dialogue:"):
+                    parts = line.split(",", 9)
+                    if len(parts) >= 10:
+                        try:
+                            start = self._parse_ass_time(parts[1].strip())
+                            end = self._parse_ass_time(parts[2].strip())
+                            if start >= shift_after - 0.01:
+                                start += shift_by
+                                end += shift_by
+                                parts[1] = self._ass_time(start)
+                                parts[2] = self._ass_time(end)
+                                line = ",".join(parts[:9]) + "," + parts[9]
+                        except Exception:
+                            pass
+                out.append(line)
+            ass_path.write_text("\n".join(out), encoding="utf-8-sig")
+        except Exception as e:
+            print(f"[ASS] Shift error: {e}")
+
+    async def _get_video_fps(self, video_path: str) -> float:
+        try:
+            result = subprocess.run([self.ffmpeg, "-i", video_path], capture_output=True, text=True, timeout=30)
+            m = re.search(r'(\d+(?:\.\d+)?)\s*fps', result.stderr)
+            if m:
+                return max(1.0, float(m.group(1)))
+        except Exception:
+            pass
+        return 30.0
+
+    async def _has_audio(self, video_path: str) -> bool:
+        try:
+            result = subprocess.run([self.ffmpeg, "-i", video_path], capture_output=True, text=True, timeout=30)
+            return bool(re.search(r'Stream.*Audio:', result.stderr))
+        except Exception:
+            return False
+
     
-    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False, banner_enabled: bool = False, banner_path: str = None, banner_x: int = 0, banner_y: int = 0, banner_w: int = 1080, banner_h: int = 200, banner_opacity: int = 100) -> str:
+    async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False, banner_enabled: bool = False, banner_path: str = None, banner_x: int = 0, banner_y: int = 0, banner_w: int = 1080, banner_h: int = 200, banner_opacity: int = 100, banner_style: str = "overlay", banner_position: int = 50, banner_duration: int = 3) -> str:
         kw_part = f"_{filename_keywords}" if filename_keywords else ""
         output_path = self.output_dir / f"short_{job_id}_{index}{kw_part}.mp4"
 
@@ -498,41 +577,100 @@ class VideoProcessor:
                         text = text.capitalize()
                     f.write(f'Dialogue: 0,{fmt_ass(start_t)},{fmt_ass(end_t)},Default,,0,0,0,,{text}\n')
 
-        if crop_fill:
-            if blurred_bg:
-                print(f"[FFMPEG] [{index}] crop_fill + blurred_bg both enabled, using crop_fill (square fg + blurred bg)")
-            filter_parts = [
-                "[0:v]split=2[bg_in][fg_in]",
-                "[bg_in]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg]",
-                "[fg_in]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg]",
-                "[bg][fg]overlay=0:(H-h)/2[vid_out]"
-            ]
-        elif blurred_bg:
-            filter_parts = [
-                "[0:v]split=2[bg_in][fg_in]",
-                "[bg_in]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg]",
-                "[fg_in]scale=1080:-1[fg]",
-                "[bg][fg]overlay=0:(H-h)/2[vid_out]"
-            ]
-        else:
-            filter_parts = [
-                "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2[vid_out]"
-            ]
-
-        # Добавляем баннер поверх видео
         use_banner = banner_enabled and banner_path and Path(banner_path).exists()
-        if use_banner:
-            banner_scale_filter = f"scale={banner_w}:{banner_h}"
+        pause_mode = use_banner and banner_style == "pause"
+        freeze_path = None
+
+        if pause_mode:
+            # ── Режим паузы: видео останавливается в середине, показывается баннер ──
+            segdur = segment["end"] - segment["start"]
+            pos_pct = max(0.0, min(100.0, float(banner_position if banner_position is not None else 50))) / 100.0
+            T = segdur * pos_pct
+            D = max(1.0, min(float(banner_duration if banner_duration is not None else 3), max(1.0, segdur - 1.0)))
+            if T < 1.0:
+                T = min(1.0, segdur / 2.0)
+            if segdur - T < 1.0:
+                T = max(0.5, segdur - 1.0)
+
+            # кадр-заморозка в точке паузы (абсолютное время внутри исходного видео)
+            freeze_path = self.output_dir / f"freeze_{job_id}_{index}.png"
+            mid_abs = segment["start"] + T
+            subprocess.run(
+                [self.ffmpeg, "-y", "-ss", str(mid_abs), "-i", video_path, "-frames:v", "1", str(freeze_path)],
+                capture_output=True, timeout=60
+            )
+            if not freeze_path.exists():
+                # fallback: output-seeking
+                subprocess.run(
+                    [self.ffmpeg, "-y", "-i", video_path, "-ss", str(mid_abs), "-frames:v", "1", str(freeze_path)],
+                    capture_output=True, timeout=60
+                )
+            if not freeze_path.exists():
+                print(f"[FFMPEG] [{index}] Freeze frame failed, using overlay banner instead")
+                pause_mode = False
+
+        if pause_mode:
+            fps = await self._get_video_fps(video_path)
+            banner_is_video = Path(banner_path).suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
             opacity = max(0.0, min(1.0, banner_opacity / 100.0))
-            filter_parts.append(f"[1:v]loop=-1:1:0,setpts=N/FRAME_RATE/TB,{banner_scale_filter}[banner]")
+            bx = (1080 - int(banner_w)) // 2 + int(banner_x)
+            by = (1920 - int(banner_h)) // 2 + int(banner_y)
+
+            chain_parts = [
+                "[0:v]split=2[va0][vc0]",
+                f"[va0]trim=duration={T},setpts=PTS-STARTPTS[va_t]",
+                self._bg_filter_chain("[va_t]", "va", crop_fill, blurred_bg, suffix="_a"),
+                self._bg_filter_chain("[1:v]", "vbf", crop_fill, blurred_bg, suffix="_b"),
+                f"[2:v]setpts=N/FRAME_RATE/TB,fps={fps},scale={banner_w}:{banner_h},trim=duration={D},setpts=PTS-STARTPTS[banner]",
+            ]
             if opacity < 1.0:
-                filter_parts.append(f"[vid_out][banner]overlay={banner_x}:{banner_y}:format=auto,format=rgba,colorchannelmixer=aa={opacity}[vid_out]")
+                chain_parts.append(f"[vbf][banner]overlay={bx}:{by}:format=auto,format=rgba,colorchannelmixer=aa={opacity}[vb]")
             else:
-                filter_parts.append(f"[vid_out][banner]overlay={banner_x}:{banner_y}[vid_out]")
+                chain_parts.append(f"[vbf][banner]overlay={bx}:{by}[vb]")
+            chain_parts += [
+                f"[vc0]trim=start={T},setpts=PTS-STARTPTS[vc_t]",
+                self._bg_filter_chain("[vc_t]", "vc", crop_fill, blurred_bg, suffix="_c"),
+                "[va][vb][vc]concat=n=3:v=1:a=0[vid]",
+            ]
+            has_audio = await self._has_audio(video_path)
+            if has_audio:
+                # аудио идёт непрерывно (голос продолжается под замороженным кадром)
+                chain_parts.append(f"[0:a]atrim=0:{T},asetpts=N/SR/TB[aA]")
+                chain_parts.append(f"[0:a]atrim=start={T},asetpts=N/SR/TB,adelay={int(D*1000)}:all=1[aC]")
+                chain_parts.append("[aA][aC]concat=n=2:v=0:a=1[aud]")
+            filter_chain = ";".join(chain_parts)
+            map_video = "[vid]"
+            map_audio = "[aud]" if has_audio else None
 
-        filter_chain = ";".join(filter_parts)
+            cmd_inputs = ["-ss", str(segment["start"]), "-t", str(segdur), "-i", video_path]
+            cmd_inputs += ["-loop", "1", "-t", str(D), "-framerate", str(fps), "-i", str(freeze_path)]
+            if banner_is_video:
+                cmd_inputs += ["-stream_loop", "-1", "-i", banner_path]
+            else:
+                cmd_inputs += ["-loop", "1", "-i", banner_path]
 
-        print(f"[FFMPEG] [{index}] crop_fill={crop_fill}, blurred_bg={blurred_bg}, banner={use_banner}, filter={filter_chain[:60]}...")
+            # сдвигаем тайминги субтитров второй половины на длину паузы
+            self._shift_ass_times(ass_path, T, D)
+        else:
+            # ── Overlay режим: баннер поверх всего видео ──
+            filter_parts = [self._bg_filter_chain("[0:v]", "vid_out", crop_fill, blurred_bg)]
+            if use_banner:
+                banner_scale_filter = f"scale={banner_w}:{banner_h}"
+                opacity = max(0.0, min(1.0, banner_opacity / 100.0))
+                filter_parts.append(f"[1:v]loop=-1:1:0,setpts=N/FRAME_RATE/TB,{banner_scale_filter}[banner]")
+                if opacity < 1.0:
+                    filter_parts.append(f"[vid_out][banner]overlay={banner_x}:{banner_y}:format=auto,format=rgba,colorchannelmixer=aa={opacity}[vid_out]")
+                else:
+                    filter_parts.append(f"[vid_out][banner]overlay={banner_x}:{banner_y}[vid_out]")
+            filter_chain = ";".join(filter_parts)
+            map_video = "[vid_out]"
+            map_audio = "0:a?"
+
+            cmd_inputs = ["-ss", str(segment["start"]), "-i", video_path]
+            if use_banner:
+                cmd_inputs += ["-i", banner_path]
+
+        print(f"[FFMPEG] [{index}] crop_fill={crop_fill}, blurred_bg={blurred_bg}, banner={use_banner}, style={banner_style if use_banner else '-'}, filter={filter_chain[:60]}...")
 
         # GPU или CPU
         if self.gpu_encoder == "h264_nvenc":
@@ -555,23 +693,17 @@ class VideoProcessor:
         # ASS субтитры — один subtitles фильтр вместо цепочки drawtext
         if ass_path and ass_path.exists():
             ass_rel = os.path.relpath(ass_path, BASE_DIR).replace('\\', '/')
-            filter_chain += f";[vid_out]subtitles=filename={ass_rel}:fontsdir=fonts[vid_out]"
+            filter_chain += f";{map_video}subtitles=filename={ass_rel}:fontsdir=fonts{map_video}"
         
         loop = asyncio.get_event_loop()
 
-        cmd = [
-            self.ffmpeg, "-y",
-            "-ss", str(segment["start"]),
-            "-i", video_path,
-        ]
-        if use_banner:
-            cmd += ["-i", banner_path]
-        cmd += [
-            "-t", str(segment["end"] - segment["start"]),
+        cmd = [self.ffmpeg, "-y"] + cmd_inputs + [
             "-filter_complex", filter_chain,
-            "-map", "[vid_out]",
-            "-map", "0:a?",
-            "-c:v", video_codec,
+            "-map", map_video,
+        ]
+        if map_audio:
+            cmd += ["-map", map_audio]
+        cmd += ["-c:v", video_codec,
         ]
         if video_preset:
             cmd += ["-preset", video_preset]
@@ -584,7 +716,7 @@ class VideoProcessor:
         
         print(f"[FFMPEG] [{index}] Render: {' '.join(cmd[:10])}...")
         
-        result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=300, cwd=str(BASE_DIR)))
+        result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=600, cwd=str(BASE_DIR)))
         
         if result.returncode != 0:
             print(f"[FFMPEG] [{index}] Error: {result.returncode}")
@@ -593,16 +725,13 @@ class VideoProcessor:
             # Fallback на CPU если GPU кодировщик не сработал
             if self.gpu_encoder and video_codec != "libx264":
                 print(f"[FFMPEG] Retrying with libx264 (GPU encoder failed)...")
-                cmd = [self.ffmpeg, "-y",
-                    "-ss", str(segment["start"]),
-                    "-i", video_path]
-                if use_banner:
-                    cmd += ["-i", banner_path]
-                cmd += [
-                    "-t", str(segment["end"] - segment["start"]),
+                cmd = [self.ffmpeg, "-y"] + cmd_inputs + [
                     "-filter_complex", filter_chain,
-                    "-map", "[vid_out]",
-                    "-map", "0:a?",
+                    "-map", map_video,
+                ]
+                if map_audio:
+                    cmd += ["-map", map_audio]
+                cmd += [
                     "-c:v", "libx264",
                     "-preset", "ultrafast",
                     "-crf", "18",
@@ -611,7 +740,7 @@ class VideoProcessor:
                     "-b:a", "192k",
                     "-movflags", "+faststart",
                     str(output_path)]
-                result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=300, cwd=str(BASE_DIR)))
+                result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=600, cwd=str(BASE_DIR)))
                 if result.returncode == 0:
                     video_codec = "libx264"
                     video_preset = "ultrafast"
@@ -619,11 +748,15 @@ class VideoProcessor:
             if result.returncode != 0:
                 if ass_path and ass_path.exists():
                     ass_path.unlink(missing_ok=True)
+                if freeze_path and Path(freeze_path).exists():
+                    Path(freeze_path).unlink(missing_ok=True)
                 return None
         
         # Чистим временные ASS файлы
         if ass_path and ass_path.exists():
             ass_path.unlink(missing_ok=True)
+        if freeze_path and Path(freeze_path).exists():
+            Path(freeze_path).unlink(missing_ok=True)
 
         if output_path.exists():
             print(f"[FFMPEG] Video created: {output_path}")
