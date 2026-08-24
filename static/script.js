@@ -227,17 +227,18 @@ document.addEventListener('DOMContentLoaded', async function() {
         off: 'Выкл — просто нарезка подряд',
         global: 'Топ — выбирает лучшие моменты из всего видео, но может пропустить концовку',
         parts: 'Сетка — равномерно покрывает всё видео, но локальный лучший может быть слабее',
-        hybrid: 'Гибрид — равномерное покрытие + финальный отбор только лучших',
-        auto_duration: 'Авто — программа сама выбирает длительность каждого лучшего момента (в заданном диапазоне)'
+        hybrid: 'Гибрид — равномерное покрытие + финальный отбор только лучших'
     };
 
-    function applyAutoDurationUI(tab, mode) {
-        const isAuto = mode === 'auto_duration';
+    // Авто-длительность: галочка поверх выбора сегментов
+    function applyAutoDurationUI(tab, checked) {
+        const isAuto = !!checked;
         const rangeRow = document.getElementById('auto-range-' + tab);
         if (rangeRow) rangeRow.classList.toggle('hidden', !isAuto);
         const lengthMap = { url: 'short-length', file: 'short-length-file', integration: 'integration-short-length' };
         const len = document.getElementById(lengthMap[tab]);
         if (len) len.disabled = isAuto;
+        updateEstimate(tab);
     }
 
     document.querySelectorAll('.smart-mode-btn').forEach(btn => {
@@ -252,15 +253,99 @@ document.addEventListener('DOMContentLoaded', async function() {
             btn.style.opacity = '1';
             const desc = document.getElementById('smart-desc-' + tab);
             if (desc) desc.textContent = smartDescs[mode] || '';
-            applyAutoDurationUI(tab, mode);
+            updateEstimate(tab);
         });
         // init first as active
         if (btn.querySelector(':checked')) {
             btn.style.background = '#1F2937';
             btn.style.opacity = '1';
-            applyAutoDurationUI(btn.dataset.tab, btn.dataset.mode);
         }
     });
+
+    ['url', 'file', 'integration'].forEach(tab => {
+        const cb = document.getElementById('auto-duration-' + tab);
+        if (cb) cb.addEventListener('change', () => applyAutoDurationUI(tab, cb.checked));
+        applyAutoDurationUI(tab, cb ? cb.checked : false);
+    });
+
+    // ── Оценка времени обработки ──
+    const WHISPER_FACTORS = { base: 1, small: 3.5, medium: 7, 'large-v3-turbo': 4, 'large-v3': 14 };
+
+    function fmtTime(sec) {
+        if (sec < 60) return '~' + Math.max(1, Math.round(sec)) + ' сек';
+        const m = sec / 60;
+        if (m < 60) return '~' + Math.round(m) + ' мин';
+        return '~' + (m / 60).toFixed(1) + ' ч';
+    }
+
+    function getTabMode(tab) {
+        const radio = document.querySelector(`input[name="smart-mode-${tab}"]:checked`);
+        return radio ? radio.value : 'off';
+    }
+
+    function updateEstimate(tab) {
+        const box = document.getElementById('estimate-' + tab);
+        if (!box) return;
+        const videoMin = parseFloat(document.getElementById('video-duration-' + tab)?.value) || 20;
+        const count = parseInt(document.getElementById(
+            tab === 'url' ? 'shorts-count' : tab === 'file' ? 'shorts-count-file' : 'integration-shorts-count'
+        )?.value) || 5;
+        const len = parseInt(document.getElementById(
+            tab === 'url' ? 'short-length' : tab === 'file' ? 'short-length-file' : 'integration-short-length'
+        )?.value) || 45;
+        const autoCb = document.getElementById('auto-duration-' + tab);
+        const auto = !!(autoCb && autoCb.checked);
+        const minLen = parseInt(document.getElementById('auto-min-' + tab)?.value) || 30;
+        const maxLen = parseInt(document.getElementById('auto-max-' + tab)?.value) || 60;
+        const segLen = auto ? (minLen + maxLen) / 2 : len;
+        const whisper = document.getElementById('whisper-model')?.value || 'base';
+        const mode = getTabMode(tab);
+
+        const videoSec = videoMin * 60;
+        const wf = WHISPER_FACTORS[whisper] || 1;
+        const transcribe = count * segLen * 0.1 * wf;          // Whisper на GPU
+        const render = count * segLen * 0.25;                  // ffmpeg (NVENC + blur + субтитры)
+        const selection = mode === 'off' ? 0 : videoSec * 0.25 + 30;  // нейросетевой отбор по всему видео
+        const autoTime = auto ? count * 3 : 0;                 // уточнение длительности
+        const ai = count * 2;                                  // AI-метаданные
+
+        const perShort = (transcribe + render) / count + ai / count + (auto ? 3 : 0);
+        const total = transcribe + render + selection + autoTime + ai;
+
+        const parts = [];
+        if (mode !== 'off') parts.push('отбор моментов ' + fmtTime(selection));
+        parts.push('Whisper ' + whisper + ' ' + fmtTime(transcribe));
+        parts.push('рендер ' + fmtTime(render));
+        if (auto) parts.push('авто-длина ' + fmtTime(autoTime));
+        parts.push('AI ' + fmtTime(ai));
+
+        box.innerHTML = `
+            <div class="text-gray-400 text-xs mb-1">Ориентировочно (${whisper}, ${mode === 'off' ? 'просто нарезка' : mode}, ${count} шт):</div>
+            <div class="text-purple-300">1 шортс — ${fmtTime(perShort)}</div>
+            <div class="text-gray-300">все ${count} — ${fmtTime(total)}</div>
+            <div class="text-gray-500 text-xs mt-1">${parts.join(' • ')}</div>
+        `;
+    }
+
+    function initEstimates() {
+        ['url', 'file', 'integration'].forEach(tab => {
+            const ids = [
+                'video-duration-' + tab,
+                tab === 'url' ? 'shorts-count' : tab === 'file' ? 'shorts-count-file' : 'integration-shorts-count',
+                tab === 'url' ? 'short-length' : tab === 'file' ? 'short-length-file' : 'integration-short-length',
+                'auto-min-' + tab, 'auto-max-' + tab, 'auto-duration-' + tab, 'whisper-model'
+            ];
+            ids.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener('input', () => updateEstimate(tab));
+                    el.addEventListener('change', () => updateEstimate(tab));
+                }
+            });
+        });
+    }
+    initEstimates();
+    ['url', 'file', 'integration'].forEach(tab => updateEstimate(tab));
     
     
     // Переключатели
@@ -482,6 +567,10 @@ async function loadSettings() {
                     document.getElementById('subtitle-word-fade').checked = s.word_fade !== false;
                 }
 
+                if (document.getElementById('whisper-model') && s.whisper_model) {
+                    document.getElementById('whisper-model').value = s.whisper_model;
+                }
+
                 if (document.getElementById('api-provider') && s.api_provider) {
                     document.getElementById('api-provider').value = s.api_provider;
                 }
@@ -548,6 +637,7 @@ async function saveSettings() {
         const wordsCountBackend = wordsCountVal === 'all' ? '999' : (wordsCountVal || '5');
         formData.append('words_count', wordsCountBackend);
         formData.append('word_fade', wordFadeVal ? 'true' : 'false');
+        formData.append('whisper_model', document.getElementById('whisper-model')?.value || 'base');
         
         // Баннер
         formData.append('banner_x', document.getElementById('banner-x-settings')?.value || '0');
@@ -919,6 +1009,7 @@ async function createShorts() {
         formData.append('short_length', shortLength);
         formData.append('shorts_count', shortsCount);
         formData.append('smart_selection', document.querySelector('input[name="smart-mode-url"]:checked')?.value || 'off');
+        formData.append('auto_duration', String(document.getElementById('auto-duration-url')?.checked || false));
         formData.append('min_short_length', document.getElementById('auto-min-url')?.value || '30');
         formData.append('max_short_length', document.getElementById('auto-max-url')?.value || '60');
         formData.append('blurred_bg', String(document.getElementById('blurred-bg-url')?.checked || false));
@@ -1004,6 +1095,7 @@ async function createShortsFromFile() {
         formData.append('short_length', shortLength);
         formData.append('shorts_count', shortsCount);
         formData.append('smart_selection', document.querySelector('input[name="smart-mode-file"]:checked')?.value || 'off');
+        formData.append('auto_duration', String(document.getElementById('auto-duration-file')?.checked || false));
         formData.append('min_short_length', document.getElementById('auto-min-file')?.value || '30');
         formData.append('max_short_length', document.getElementById('auto-max-file')?.value || '60');
         formData.append('blurred_bg', String(document.getElementById('blurred-bg-file')?.checked || false));
@@ -1298,6 +1390,7 @@ async function startIntegration() {
         formData.append('save_folder', getSelectedSaveFolder('integration'));
         formData.append('crop_fill', String(document.getElementById('integration-crop-fill')?.checked || false));
         formData.append('smart_selection', document.querySelector('input[name="smart-mode-integration"]:checked')?.value || 'off');
+        formData.append('auto_duration', String(document.getElementById('auto-duration-integration')?.checked || false));
         formData.append('min_short_length', document.getElementById('auto-min-integration')?.value || '30');
         formData.append('max_short_length', document.getElementById('auto-max-integration')?.value || '60');
 

@@ -141,42 +141,122 @@ class VideoProcessor:
         print(f"[FFPROBE] Failed to get duration, returning default")
         return 300
     
-    async def extract_segments(self, video_path: str, short_length: int, shorts_count: int, subtitle_segments: List[Dict] = None, smart_selection: str = "off", min_length: int = 30, max_length: int = 60) -> List[Dict]:
+    async def extract_segments(self, video_path: str, short_length: int, shorts_count: int, subtitle_segments: List[Dict] = None, smart_selection: str = "off", auto_duration: bool = False, min_length: int = 30, max_length: int = 60) -> List[Dict]:
         duration = await self.get_duration(video_path)
         mode = smart_selection or "off"
 
-        # ── Автоматическая длительность: программа сама выбирает длину лучшего момента ──
-        if mode == "auto_duration":
+        # ── Авто-длительность: обычный выбор сегментов + уточнение самого интересного окна ──
+        if auto_duration:
             min_length = max(15, int(min_length or 30))
             max_length = max(min_length, int(max_length or 60))
             if duration < min_length:
                 print(f"[PROCESS] Video too short for auto-duration: {duration}s < {min_length}s")
                 return []
+            # ищем лучшие места базовым режимом (окно = max_length), затем уточняем длину
+            base = self._base_segments(duration, min(max_length, int(duration)), shorts_count, subtitle_segments, video_path, mode)
+            if not base:
+                return []
             if subtitle_segments:
-                return self._find_best_segments_auto(duration, min_length, max_length, shorts_count, subtitle_segments, video_path)
-            return self._default_segments_auto(duration, min_length, max_length, shorts_count)
+                phrases = self._build_phrases(subtitle_segments)
+                if phrases:
+                    import bisect
+                    p_starts = [p["start"] for p in phrases]
+                    refined = [self._refine_segment_duration(phrases, p_starts, seg, min_length, max_length) for seg in base]
+                    refined = [r for r in refined if r]
+                    print(f"[PROCESS] Auto-duration refined {len(refined)} segments ({min_length}-{max_length}s)")
+                    return refined
+            return base
 
         if duration < short_length:
             print(f"[PROCESS] Video too short: {duration}s < {short_length}s")
             return []
-        
-        # Если smart_selection и есть субтитры — используем нейросетевой скоринг
+        return self._base_segments(duration, short_length, shorts_count, subtitle_segments, video_path, mode)
+
+    def _base_segments(self, duration: float, short_length: int, shorts_count: int, subtitle_segments: List[Dict], video_path: str, mode: str) -> List[Dict]:
+        """Выбирает сегменты базовым способом (off / density / нейросетевой)."""
         if mode in ("global", "parts", "hybrid", "true", "1") and subtitle_segments:
             return self._find_best_segments_nn(duration, short_length, shorts_count, subtitle_segments, video_path)
-        
-        # Если есть субтитры без smart_selection — выбираем лучшие моменты по плотности речи
         if subtitle_segments:
             return self._find_best_segments(duration, short_length, shorts_count, subtitle_segments)
-        
-        # Иначе просто режем по порядку
         segments = []
         for i in range(min(shorts_count, int(duration // short_length))):
             start = i * short_length
             end = min(start + short_length, duration)
             segments.append({"start": start, "end": end})
-        
         print(f"[PROCESS] Found {len(segments)} segments")
         return segments
+
+    def _score_window_interest(self, phrases: List[Dict], p_starts: List[float], start: float, end: float) -> float:
+        """0-100: насколько интересно окно [start,end] по речи (плотность, эмоции, темп)."""
+        import bisect
+        i0 = bisect.bisect_left(p_starts, start)
+        total_words = 0
+        speech = 0.0
+        count = 0
+        phrase_lengths = []
+        text_parts = []
+        j = i0
+        while j < len(phrases) and phrases[j]["start"] < end:
+            p = phrases[j]
+            if p["end"] <= end:
+                total_words += p["words"]
+                speech += p["duration"]
+                count += 1
+                phrase_lengths.append(p["words"])
+                text_parts.append(p.get("full_text", ""))
+            j += 1
+        if count == 0:
+            return -1.0
+
+        win_len = max(end - start, 0.1)
+        window_text = " ".join(text_parts)
+        density = total_words / win_len
+        speech_ratio = speech / win_len
+        avg_phrase_len = total_words / count
+        words_lower = window_text.lower().split()
+        unique_ratio = len(set(words_lower)) / max(len(words_lower), 1)
+        exclamations = window_text.count('!')
+        questions = window_text.count('?')
+        emotion_boost = (exclamations * 3) + (questions * 2)
+        pacing_var = 0.0
+        if count >= 3:
+            mean_pl = sum(phrase_lengths) / count
+            if mean_pl > 0:
+                variance = sum((pl - mean_pl) ** 2 for pl in phrase_lengths) / count
+                pacing_var = (variance ** 0.5) / mean_pl
+        return (
+            min(density / 5.0, 1.0) * 25 +
+            min(speech_ratio, 1.0) * 25 +
+            min(avg_phrase_len / 20.0, 1.0) * 15 +
+            unique_ratio * 15 +
+            min(emotion_boost / 10.0, 1.0) * 10 +
+            min(pacing_var, 1.0) * 10 +
+            min(total_words / 100.0, 1.0) * 2
+        )
+
+    def _refine_segment_duration(self, phrases: List[Dict], p_starts: List[float], seg: Dict, min_length: int, max_length: int) -> Dict:
+        """Внутри найденного сегмента ищет самое интересное окно в диапазоне [min_length, max_length]."""
+        start = seg["start"]
+        end = seg["end"]
+        segdur = end - start
+        if segdur <= min_length:
+            return seg
+        step = 5
+        best = None
+        best_score = -1.0
+        w_start = start
+        while w_start <= end - min_length:
+            max_wlen = min(max_length, end - w_start)
+            w_len = min_length
+            while w_len <= max_wlen:
+                w_end = w_start + w_len
+                score = self._score_window_interest(phrases, p_starts, w_start, w_end)
+                if score > best_score:
+                    best_score = score
+                    best = {"start": float(w_start), "end": float(w_end)}
+                w_len += step
+            w_start += step
+        return best or seg
     
     def _find_best_segments_nn(self, duration: float, short_length: int, shorts_count: int, subtitle_segments: List[Dict], video_path: str = "") -> List[Dict]:
         """Находит лучшие отрезки с помощью нейросетевого скоринга (SegmentScorer)."""
@@ -424,117 +504,6 @@ class VideoProcessor:
             end = min(start + short_length, duration)
             segments.append({"start": start, "end": end})
         return segments
-
-    def _default_segments_auto(self, duration: float, min_length: int, max_length: int, shorts_count: int) -> List[Dict]:
-        """Fallback для авто-длительности: делим видео на равные куски в рамках диапазона."""
-        avg = duration / max(1, shorts_count)
-        avg = max(min_length, min(max_length, avg))
-        segments = []
-        start = 0.0
-        while start < duration - 0.5 and len(segments) < shorts_count:
-            end = min(start + avg, duration)
-            segments.append({"start": float(start), "end": float(end)})
-            start = end
-        return segments
-
-    def _find_best_segments_auto(self, duration: float, min_length: int, max_length: int, shorts_count: int, subtitle_segments: List[Dict], video_path: str = "") -> List[Dict]:
-        """
-        Автоматический режим длительности:
-        программа сама выбирает длину каждого лучшего момента в рамках [min_length, max_length].
-        """
-        import bisect
-        from segment_scorer import SegmentScorer, extract_features_for_windows
-
-        phrases = self._build_phrases(subtitle_segments)
-        if not phrases:
-            return self._default_segments_auto(duration, min_length, max_length, shorts_count)
-
-        p_starts = [p["start"] for p in phrases]
-        step = 5
-        scored = []
-        start = 0
-        while start <= duration - min_length:
-            i0 = bisect.bisect_left(p_starts, start)
-            j = i0
-            total_words = 0
-            speech = 0.0
-            count = 0
-            end = start + min_length
-            while end <= min(duration, start + max_length):
-                # подключаем фразы, полностью влезающие в окно (по мере роста end)
-                while j < len(phrases):
-                    p = phrases[j]
-                    if p["start"] >= end:
-                        break
-                    if p["end"] <= end:
-                        total_words += p["words"]
-                        speech += p["duration"]
-                        count += 1
-                        j += 1
-                    else:
-                        break
-                if count > 0:
-                    dur = max(end - start, 0.1)
-                    density = total_words / dur
-                    speech_ratio = speech / dur
-                    scored.append({
-                        "start": float(start), "end": float(end),
-                        "words": total_words, "count": count,
-                        "density": density, "speech_ratio": speech_ratio,
-                        "text_score": min(density / 5.0, 1.0) * 50 + min(speech_ratio, 1.0) * 50
-                    })
-                end += step
-            start += step
-
-        if not scored:
-            return self._default_segments_auto(duration, min_length, max_length, shorts_count)
-
-        # ограничиваем дорогую экстракцию признаков топ-кандидатами по тексту
-        scored.sort(key=lambda x: x["text_score"], reverse=True)
-        top = scored[:60]
-
-        from api_keys import get_keys
-        openai_api_keys = get_keys("openai")
-        candidates = extract_features_for_windows(
-            video_path, [(c["start"], c["end"]) for c in top], phrases, openai_api_keys
-        )
-        if not candidates:
-            return self._default_segments_auto(duration, min_length, max_length, shorts_count)
-
-        scorer = SegmentScorer(input_dim=14, n_epochs=20, learning_rate=1e-2, top_ratio=0.2)
-        scorer.fit(candidates)
-        ranked = scorer.rank_segments(candidates)
-
-        has_llm = any("llm_score" in c for c in ranked)
-        if has_llm:
-            for c in ranked:
-                nn = c.get("nn_score", 0)
-                llm = c.get("llm_score", 0.5)
-                c["final_score"] = 0.6 * nn + 0.4 * llm
-            ranked.sort(key=lambda x: x.get("final_score", 0), reverse=True)
-
-        best_segments = []
-        for cand in ranked:
-            overlap = any(cand["start"] < sel["end"] and cand["end"] > sel["start"] for sel in best_segments)
-            if not overlap:
-                cand["score"] = cand.get("final_score", cand.get("nn_score", cand["score"]))
-                best_segments.append(cand)
-            if len(best_segments) >= shorts_count:
-                break
-        if len(best_segments) < shorts_count:
-            for cand in ranked:
-                if cand in best_segments:
-                    continue
-                overlap = any(cand["start"] < sel["end"] and cand["end"] > sel["start"] for sel in best_segments)
-                if not overlap:
-                    cand["score"] = cand.get("final_score", cand.get("nn_score", cand["score"]))
-                    best_segments.append(cand)
-                if len(best_segments) >= shorts_count:
-                    break
-
-        best_segments.sort(key=lambda x: x["start"])
-        print(f"[PROCESS] Auto-duration selected {len(best_segments)} segments (range {min_length}-{max_length}s)")
-        return best_segments
 
     def _bg_filter_chain(self, in_label: str, out_label: str, crop_fill: bool, blurred_bg: bool, suffix: str = "") -> str:
         """Строит цепочку фоновой обработки (кадрирование/blur/пады) in_label -> out_label."""
@@ -921,7 +890,9 @@ class VideoProcessor:
         }
         return colors.get(color_name, "0xFFFFFF")
     
-    async def get_subtitles(self, video_path: str, start: float, end: float, model_size: str = "base", word_timestamps: bool = True):
+    async def get_subtitles(self, video_path: str, start: float, end: float, model_size: str = None, word_timestamps: bool = True):
+        if model_size is None:
+            model_size = _read_env("WHISPER_MODEL", "base")
         try:
             model = self._get_whisper_model(model_size)
             

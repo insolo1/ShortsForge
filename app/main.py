@@ -391,6 +391,7 @@ async def get_settings():
             "shadowcolor": _read_env("SUBTITLE_SHADOW_COLOR", "black"),
             "words_count": int(_read_env("SUBTITLE_WORDS_COUNT", "3")),
             "word_fade": _read_env("SUBTITLE_WORD_FADE", "1") == "1",
+            "whisper_model": _read_env("WHISPER_MODEL", "base"),
             "api_provider": "groq" if _read_env("GROQ_API_KEY") else ("openai" if _read_env("OPENAI_API_KEY") else "groq"),
             "api_key_masked": "***" if (_read_env("GROQ_API_KEY") or _read_env("OPENAI_API_KEY")) else "",
             "api_keys": {
@@ -411,6 +412,7 @@ async def update_settings(
     boxborder: int = Form(0), boxcolor: str = Form("black@0.8"),
     shadowx: int = Form(2), shadowy: int = Form(2), shadowcolor: str = Form("black"),
     words_count: int = Form(3), word_fade: bool = Form(True),
+    whisper_model: str = Form("base"),
     api_provider: Optional[str] = Form(None), api_key: Optional[str] = Form(None),
     banner_x: str = Form("0"), banner_y: str = Form("0"),
     banner_w: str = Form("1080"), banner_h: str = Form("200"), banner_opacity: str = Form("100")
@@ -443,6 +445,7 @@ async def update_settings(
         "SUBTITLE_SHADOW_COLOR": shadowcolor,
         "SUBTITLE_WORDS_COUNT": str(words_count),
         "SUBTITLE_WORD_FADE": '1' if word_fade else '0',
+        "WHISPER_MODEL": whisper_model,
         "BANNER_X": banner_x,
         "BANNER_Y": banner_y,
         "BANNER_W": banner_w,
@@ -906,7 +909,8 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                         filename_keywords: str = "",
                         banner_path: str = None, banner_style: str = "overlay",
                         banner_position: int = 50, banner_duration: int = 3,
-                        min_short_length: int = 30, max_short_length: int = 60):
+                        min_short_length: int = 30, max_short_length: int = 60,
+                        auto_duration: bool = False):
     """Run processing in a thread, updating jobs + job_logs"""
     import asyncio
     loop = asyncio.new_event_loop()
@@ -923,6 +927,7 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
             processor.extract_segments(
                 video_path, short_length, shorts_count,
                 smart_selection=smart_selection,
+                auto_duration=auto_duration,
                 min_length=min_short_length, max_length=max_short_length
             )
         )
@@ -1007,7 +1012,8 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                            filename_keywords: str = "",
                            banner_path: str = None, banner_style: str = "overlay",
                            banner_position: int = 50, banner_duration: int = 3,
-                           min_short_length: int = 30, max_short_length: int = 60):
+                           min_short_length: int = 30, max_short_length: int = 60,
+                           auto_duration: bool = False):
     """Process multiple videos, distributing shorts_count across them"""
     import asyncio
     import math
@@ -1037,6 +1043,7 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                 processor.extract_segments(
                     vpath, short_length, per_video,
                     smart_selection=smart_selection,
+                    auto_duration=auto_duration,
                     min_length=min_short_length, max_length=max_short_length
                 )
             )
@@ -1130,6 +1137,7 @@ async def upload_url(
     banner_style: str = Form("overlay"),
     banner_position: int = Form(50), banner_duration: int = Form(3),
     min_short_length: int = Form(30), max_short_length: int = Form(60),
+    auto_duration: bool = Form(False),
     filename_keywords: str = Form("")
 ):
     job_id = str(uuid.uuid4())
@@ -1160,7 +1168,7 @@ async def upload_url(
                 banner_w, banner_h, banner_opacity,
                 filename_keywords,
                 banner_path, banner_style, banner_position, banner_duration,
-                min_short_length, max_short_length
+                min_short_length, max_short_length, auto_duration
             )
         except Exception as e:
             jobs[job_id]["status"] = "failed"
@@ -1191,6 +1199,7 @@ async def upload_file(
     banner_style: str = Form("overlay"),
     banner_position: int = Form(50), banner_duration: int = Form(3),
     min_short_length: int = Form(30), max_short_length: int = Form(60),
+    auto_duration: bool = Form(False),
     filename_keywords: str = Form("")
 ):
     job_id = str(uuid.uuid4())
@@ -1224,7 +1233,7 @@ async def upload_file(
         banner_w, banner_h, banner_opacity,
         filename_keywords,
         banner_path, banner_style, banner_position, banner_duration,
-        min_short_length, max_short_length
+        min_short_length, max_short_length, auto_duration
     ))
 
     return {"job_id": job_id, "status": "started" if started else "queued"}
@@ -1247,6 +1256,7 @@ async def upload_folder(
     banner_style: str = Form("overlay"),
     banner_position: int = Form(50), banner_duration: int = Form(3),
     min_short_length: int = Form(30), max_short_length: int = Form(60),
+    auto_duration: bool = Form(False),
     filename_keywords: str = Form("")
 ):
     job_id = str(uuid.uuid4())
@@ -1281,7 +1291,7 @@ async def upload_folder(
         banner_w, banner_h, banner_opacity,
         filename_keywords,
         banner_path, banner_style, banner_position, banner_duration,
-        min_short_length, max_short_length
+        min_short_length, max_short_length, auto_duration
     ))
 
     return {"job_id": job_id, "status": "started" if started else "queued"}

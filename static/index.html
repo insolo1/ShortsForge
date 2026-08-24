@@ -198,12 +198,14 @@
                         <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="url" data-mode="hybrid" style="background:#374151;color:#86EFAC">
                             <input type="radio" name="smart-mode-url" value="hybrid" class="hidden"> Гибрид
                         </label>
-                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="url" data-mode="auto_duration" style="background:#374151;color:#FDE047">
-                            <input type="radio" name="smart-mode-url" value="auto_duration" class="hidden"> Авто
-                        </label>
                     </div>
                     <div id="smart-desc-url" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
-                    <div id="auto-range-url" class="hidden grid grid-cols-2 gap-4 mt-3">
+
+                    <div class="flex items-center gap-2 mt-3">
+                        <input type="checkbox" id="auto-duration-url" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Авто-длительность — программа сама подберёт самый интересный отрезок</span>
+                    </div>
+                    <div id="auto-range-url" class="hidden grid grid-cols-2 gap-4 mt-2">
                         <div>
                             <label class="block text-xs text-gray-500 mb-1">Мин. длина (сек)</label>
                             <input type="number" id="auto-min-url" value="30" min="15" max="120"
@@ -214,6 +216,17 @@
                             <input type="number" id="auto-max-url" value="60" min="15" max="180"
                                 class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
                         </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Длительность видео (мин)</label>
+                        <input type="number" id="video-duration-url" value="20" min="1"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div class="flex items-end">
+                        <div id="estimate-url" class="w-full p-3 rounded-xl bg-gray-800/60 border border-gray-700 text-sm text-gray-300"></div>
                     </div>
                 </div>
 
@@ -329,12 +342,14 @@
                         <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="file" data-mode="hybrid" style="background:#374151;color:#86EFAC">
                             <input type="radio" name="smart-mode-file" value="hybrid" class="hidden"> Гибрид
                         </label>
-                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="file" data-mode="auto_duration" style="background:#374151;color:#FDE047">
-                            <input type="radio" name="smart-mode-file" value="auto_duration" class="hidden"> Авто
-                        </label>
                     </div>
                     <div id="smart-desc-file" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
-                    <div id="auto-range-file" class="hidden grid grid-cols-2 gap-4 mt-3">
+
+                    <div class="flex items-center gap-2 mt-3">
+                        <input type="checkbox" id="auto-duration-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Авто-длительность — программа сама подберёт самый интересный отрезок</span>
+                    </div>
+                    <div id="auto-range-file" class="hidden grid grid-cols-2 gap-4 mt-2">
                         <div>
                             <label class="block text-xs text-gray-500 mb-1">Мин. длина (сек)</label>
                             <input type="number" id="auto-min-file" value="30" min="15" max="120"
@@ -345,6 +360,17 @@
                             <input type="number" id="auto-max-file" value="60" min="15" max="180"
                                 class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
                         </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-2">Длительность видео (мин)</label>
+                        <input type="number" id="video-duration-file" value="20" min="1"
+                            class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                    </div>
+                    <div class="flex items-end">
+                        <div id="estimate-file" class="w-full p-3 rounded-xl bg-gray-800/60 border border-gray-700 text-sm text-gray-300"></div>
                     </div>
                 </div>
 
@@ -455,6 +481,19 @@
                         <input type="number" id="subtitle-fontsize" value="100" min="20" max="120"
                             class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
                     </div>
+                </div>
+
+                <h4 class="text-md font-semibold mb-3 mt-6">Распознавание речи (Whisper)</h4>
+                <div class="mb-4">
+                    <label class="block text-sm text-gray-400 mb-2">Модель</label>
+                    <select id="whisper-model" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                        <option value="base">base — быстро (~1x)</option>
+                        <option value="small">small — точнее (~3.5x дольше)</option>
+                        <option value="medium">medium — ещё точнее (~7x дольше)</option>
+                        <option value="large-v3-turbo">large-v3-turbo — баланс (~4x дольше)</option>
+                        <option value="large-v3">large-v3 — макс. качество (~14x дольше)</option>
+                    </select>
+                    <p class="text-xs text-gray-500 mt-1">Чем крупнее модель — тем точнее субтитры, но дольше распознавание.</p>
                 </div>
 
                 <h4 class="text-md font-semibold mb-3 mt-6">Анимация слов</h4>
@@ -778,12 +817,14 @@
                         <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="integration" data-mode="hybrid" style="background:#374151;color:#86EFAC">
                             <input type="radio" name="smart-mode-integration" value="hybrid" class="hidden"> Гибрид
                         </label>
-                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="integration" data-mode="auto_duration" style="background:#374151;color:#FDE047">
-                            <input type="radio" name="smart-mode-integration" value="auto_duration" class="hidden"> Авто
-                        </label>
                     </div>
                     <div id="smart-desc-integration" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
-                    <div id="auto-range-integration" class="hidden grid grid-cols-2 gap-4 mt-3">
+
+                    <div class="flex items-center gap-2 mt-3">
+                        <input type="checkbox" id="auto-duration-integration" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Авто-длительность — программа сама подберёт самый интересный отрезок</span>
+                    </div>
+                    <div id="auto-range-integration" class="hidden grid grid-cols-2 gap-4 mt-2">
                         <div>
                             <label class="block text-xs text-gray-500 mb-1">Мин. длина (сек)</label>
                             <input type="number" id="auto-min-integration" value="30" min="15" max="120"
