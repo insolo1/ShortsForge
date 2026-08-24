@@ -64,7 +64,7 @@ ROLES = {
     "user": ["create_shorts", "view_all"]
 }
 
-VERSION = "2.0.0"
+VERSION = "2.4.1"
 
 
 def _ok(data):
