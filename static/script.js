@@ -1734,14 +1734,13 @@ function updateSubtitlePreview() {
         preview.style.backgroundColor = previewBg;
     }
 
-    // Баннер в предпросмотре
-    const bannerEnabled = document.getElementById('banner-enabled-settings')?.checked || false;
+    // Баннер в предпросмотре (виден, если выбран файл баннера)
     const bannerLayer = document.getElementById('preview-banner-layer');
     const bannerImg = document.getElementById('preview-banner-img');
     const bannerVideo = document.getElementById('preview-banner-video');
     if (bannerLayer && bannerImg) {
         const fileInput = document.getElementById('banner-file-settings');
-        if (bannerEnabled && fileInput?.files?.[0]) {
+        if (fileInput?.files?.[0]) {
             if (!window._bannerPreviewUrl || window._bannerPreviewFile !== fileInput.files[0]) {
                 window._bannerPreviewFile = fileInput.files[0];
                 const isVideo = fileInput.files[0].type.startsWith('video/');
@@ -1764,6 +1763,8 @@ function updateSubtitlePreview() {
             applyBannerPreview(bannerImg, bannerVideo, bannerLayer, isVideo);
         } else {
             bannerLayer.style.display = 'none';
+            const ro = document.getElementById('banner-size-readout');
+            if (ro) ro.textContent = 'Баннер: файл не выбран';
         }
     }
 }
@@ -1795,6 +1796,14 @@ function applyBannerPreview(bannerImg, bannerVideo, bannerLayer, isVideo) {
     el.style.display = 'block';
     other.style.display = 'none';
     bannerLayer.style.display = 'block';
+    const ro = document.getElementById('banner-size-readout');
+    if (ro) {
+        const fitW = Math.round(bw * scaleW);
+        const fitH = Math.round(bh * scaleH);
+        const overflowNote = (bw > 1080 || bx < 0 || bx + bw > 1080 || by < 0 || by + bh > 1920)
+            ? ' — ⚠ выходит за кадр' : '';
+        ro.textContent = `Баннер: ${bw}×${bh} → в превью ${fitW}×${fitH} px${overflowNote}`;
+    }
 }
 
 function initTabs() {}
