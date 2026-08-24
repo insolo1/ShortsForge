@@ -529,11 +529,20 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Показ/скрытие настроек паузы баннера
     const bannerStyleSel = document.getElementById('banner-style-settings');
     const bannerPauseRow = document.getElementById('banner-pause-settings');
+    const bannerFileInput = document.getElementById('banner-file-settings');
+    const bannerNoFileHint = document.getElementById('banner-no-file-hint');
     if (bannerStyleSel && bannerPauseRow) {
         const syncBannerStyle = () => {
-            bannerPauseRow.classList.toggle('hidden', bannerStyleSel.value !== 'pause');
+            const isPause = bannerStyleSel.value === 'pause';
+            bannerPauseRow.classList.toggle('hidden', !isPause);
+            // если выбран режим паузы, а файла баннера нет — предупреждаем
+            if (isPause && bannerNoFileHint) {
+                const hasFile = bannerFileInput && bannerFileInput.files && bannerFileInput.files.length > 0;
+                bannerNoFileHint.classList.toggle('hidden', hasFile);
+            }
         };
         bannerStyleSel.addEventListener('change', syncBannerStyle);
+        if (bannerFileInput) bannerFileInput.addEventListener('change', syncBannerStyle);
         syncBannerStyle();
     }
     
