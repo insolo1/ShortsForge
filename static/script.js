@@ -317,7 +317,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         // субтитры сегментов выбранной моделью (base-скан переиспользуется для base-модели)
         const transcribeSeg = (smart && whisper === 'base') ? 0 : count * segLen * 0.1 * wf;
         const transcribe = scan + transcribeSeg;
-        const render = count * segLen * 0.25;                  // ffmpeg (NVENC + blur + субтитры)
+        // рендер: blur-фон + прожиг субтитров — дорого (~0.8с/с), простой рендер быстрее
+        const blurCb = document.getElementById(tab === 'url' ? 'blurred-bg-url' : tab === 'file' ? 'blurred-bg-file' : 'integration-blurred-bg');
+        const cropCb = document.getElementById(tab === 'url' ? 'crop-fill-url' : tab === 'file' ? 'crop-fill-file' : 'integration-crop-fill');
+        const heavyRender = (blurCb && blurCb.checked) || (cropCb && cropCb.checked);
+        const renderFactor = heavyRender ? 0.8 : 0.35;
+        const render = count * segLen * renderFactor;
         // отбор моментов: ≤2ч — быстрый текстовый анализ; >2ч — нейросеть (медленно)
         const selection = mode === 'off' ? 0 : (videoSec > 7200 ? videoSec * 0.25 + 30 : 10);
         const autoTime = auto ? count * 3 : 0;                 // уточнение длительности
