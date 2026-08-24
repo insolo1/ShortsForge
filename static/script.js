@@ -342,12 +342,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         const countLabel = videosCount > 1 ? `${count} шт × ${videosCount} видео` : `${count} шт`;
 
         const parts = [];
-        if (mode !== 'off') parts.push('отбор моментов ' + fmtTime(selection));
-        if (scan > 0) parts.push('скан (base) ' + fmtTime(scan));
-        if (transcribeSeg > 0) parts.push('Whisper ' + whisper + ' ' + fmtTime(transcribeSeg));
-        parts.push('рендер ' + fmtTime(render));
-        if (auto) parts.push('авто-длина ' + fmtTime(autoTime));
-        parts.push('AI ' + fmtTime(ai));
+        if (scan > 0) parts.push('Анализ всего видео для поиска лучших моментов — ' + fmtTime(scan));
+        if (mode !== 'off') parts.push('Отбор лучших моментов (алгоритм) — ' + fmtTime(selection));
+        if (transcribeSeg > 0) parts.push('Распознавание речи для субтитров (' + whisper + ') — ' + fmtTime(transcribeSeg));
+        parts.push('Сборка видео — ' + fmtTime(render));
+        if (auto) parts.push('Подбор длительности — ' + fmtTime(autoTime));
+        parts.push('Метаданные AI — ' + fmtTime(ai));
 
         const durText = knownDur
             ? 'Длительность видео: ' + fmtTime(knownDur)
@@ -355,10 +355,11 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         box.innerHTML = `
             <div class="text-gray-400 text-xs mb-1">${durText}</div>
-            <div class="text-gray-400 text-xs mb-1">Ориентировочно (${whisper}, ${mode === 'off' ? 'просто нарезка' : mode}, ${countLabel}):</div>
-            <div class="text-purple-300">1 шортс — ${fmtTime(perShort)}</div>
-            <div class="text-gray-300">всего — ${fmtTime(total)}</div>
-            <div class="text-gray-500 text-xs mt-1">${parts.join(' • ')}</div>
+            <div class="text-gray-400 text-xs mb-1">Ориентировочно (${mode === 'off' ? 'простая нарезка' : mode}, ${countLabel}):</div>
+            <div class="text-purple-300 font-semibold">⏱ 1 шортс — ${fmtTime(perShort)}</div>
+            <div class="text-gray-300 font-semibold">⏱ Всего — ${fmtTime(total)}</div>
+            <div class="text-gray-500 text-xs mt-2">Что входит во время:</div>
+            <div class="text-gray-500 text-xs space-y-0.5">${parts.map(p => '• ' + p).join('<br>')}</div>
         `;
     }
 
