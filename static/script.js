@@ -1,11 +1,20 @@
 // Основной скрипт Video Bot
 
-let currentTab = 'url';
+let currentTab = 'file';
 let currentJobId = null;
 let pollInterval = null;
 let lastShownLog = '';
 let logsPollingInterval = null;
 let currentShorts = [];
+window._sessionJobs = [];
+
+// Автоматическое удаление файлов задачи при закрытии страницы
+window.addEventListener('pagehide', () => {
+    if (window._sessionJobs && window._sessionJobs.length) {
+        const blob = new Blob([JSON.stringify({ job_ids: window._sessionJobs })], { type: 'application/json' });
+        navigator.sendBeacon('/api/cleanup-after-close', blob);
+    }
+});
 
 // Этапы обработки
 const stages = [
@@ -63,9 +72,6 @@ function updateStages(currentStatus) {
 // Переключение вкладок
 function switchTab(tab) {
     currentTab = tab;
-    document.getElementById('tab-url').className = tab === 'url' 
-        ? 'flex-1 py-3 rounded-xl font-medium bg-purple-600 hover:bg-purple-700 transition'
-        : 'flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition';
     document.getElementById('tab-file').className = tab === 'file'
         ? 'flex-1 py-3 rounded-xl font-medium bg-purple-600 hover:bg-purple-700 transition'
         : 'flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition';
@@ -75,14 +81,9 @@ function switchTab(tab) {
     document.getElementById('tab-integration').className = tab === 'integration'
         ? 'flex-1 py-3 rounded-xl font-medium bg-purple-600 hover:bg-purple-700 transition'
         : 'flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition';
-    document.getElementById('tab-cleanup').className = tab === 'cleanup'
-        ? 'flex-1 py-3 rounded-xl font-medium bg-purple-600 hover:bg-purple-700 transition'
-        : 'flex-1 py-3 rounded-xl font-medium bg-gray-700 hover:bg-gray-600 transition';
-    document.getElementById('section-url').classList.toggle('hidden', tab !== 'url');
     document.getElementById('section-file').classList.toggle('hidden', tab !== 'file');
     document.getElementById('section-settings').classList.toggle('hidden', tab !== 'settings');
     document.getElementById('section-integration').classList.toggle('hidden', tab !== 'integration');
-    document.getElementById('section-cleanup').classList.toggle('hidden', tab !== 'cleanup');
 }
 
 // Безопасное добавление обработчика
@@ -151,16 +152,6 @@ async function loadStats() {
     }
 }
 
-async function cleanupOld() {
-    try {
-        const res = await fetch('/api/cleanup', {method: 'POST'});
-        const data = await res.json();
-        if (data.deleted > 0) console.log(`[CLEANUP] Удалено ${data.deleted} файлов`);
-    } catch (e) {
-        console.error('Ошибка очистки:', e);
-    }
-}
-
 async function logout() {
     try {
         await fetch('/api/logout', {method: 'POST'});
@@ -172,12 +163,9 @@ async function logout() {
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('Страница загружена');
     
-    safeAddListener('tab-url', 'click', () => switchTab('url'));
     safeAddListener('tab-file', 'click', () => switchTab('file'));
     safeAddListener('tab-settings', 'click', () => switchTab('settings'));
     safeAddListener('tab-integration', 'click', () => switchTab('integration'));
-    safeAddListener('tab-cleanup', 'click', () => switchTab('cleanup'));
-    safeAddListener('create-btn', 'click', createShorts);
     safeAddListener('create-btn-file', 'click', createShortsFromFile);
     safeAddListener('download-all-zip-btn', 'click', downloadAllAsZip);
     safeAddListener('save-settings-btn', 'click', saveSettings);
@@ -188,9 +176,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     safeAddListener('logout-btn', 'click', logout);
     safeAddListener('load-preset', 'change', loadPresetFromSelect);
     safeAddListener('refresh-accounts-btn', 'click', loadAccountsList);
-    safeAddListener('cleanup-uploads-btn', 'click', cleanupUploads);
-    safeAddListener('cleanup-output-btn', 'click', cleanupOutput);
-    safeAddListener('cleanup-projects-btn', 'click', cleanupOldProjects);
     safeAddListener('stats-btn', 'click', () => document.getElementById('stats-modal')?.classList.remove('hidden'));
     safeAddListener('stats-modal-close', 'click', () => document.getElementById('stats-modal')?.classList.add('hidden'));
     document.getElementById('stats-modal')?.addEventListener('click', (e) => {
@@ -268,7 +253,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     });
 
-    ['url', 'file', 'integration'].forEach(tab => {
+    ['file', 'integration'].forEach(tab => {
         const cb = document.getElementById('auto-duration-' + tab);
         if (cb) cb.addEventListener('change', () => applyAutoDurationUI(tab, cb.checked));
         applyAutoDurationUI(tab, cb ? cb.checked : false);
@@ -366,10 +351,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
 
     function initEstimates() {
-        ['url', 'file', 'integration'].forEach(tab => {
+        ['file', 'integration'].forEach(tab => {
             const ids = [
-                tab === 'url' ? 'shorts-count' : tab === 'file' ? 'shorts-count-file' : 'integration-shorts-count',
-                tab === 'url' ? 'short-length' : tab === 'file' ? 'short-length-file' : 'integration-short-length',
+                tab === 'file' ? 'shorts-count-file' : 'integration-shorts-count',
+                tab === 'file' ? 'short-length-file' : 'integration-short-length',
                 'auto-min-' + tab, 'auto-max-' + tab, 'auto-duration-' + tab, 'whisper-model'
             ];
             ids.forEach(id => {
@@ -382,7 +367,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
     }
     initEstimates();
-    ['url', 'file', 'integration'].forEach(tab => updateEstimate(tab));
+    ['file', 'integration'].forEach(tab => updateEstimate(tab));
 
     // ── Авто-определение длительности видео ──
     function readFileVideoDuration(file, tab) {
@@ -469,7 +454,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     loadAccountsList();
     
     // Обработчики для сохранения в папку
-    ['url', 'file', 'integration'].forEach(tab => {
+    ['file', 'integration'].forEach(tab => {
         const cb = document.getElementById('save-video-' + tab);
         if (cb) {
             cb.addEventListener('change', () => {
@@ -625,7 +610,12 @@ async function loadSettings() {
     try {
         const response = await fetch('/api/settings');
         const data = await response.json();
-        
+
+        if (data.version) {
+            const verEl = document.getElementById('app-version');
+            if (verEl) verEl.textContent = data.version;
+        }
+
         if (data.status === 'success' && data.settings) {
             const s = data.settings;
             // Субтитры
@@ -1071,78 +1061,6 @@ async function loadPresets() {
     }
 }
 
-// Создание Shorts из URL
-async function createShorts() {
-    const shortLength = document.getElementById('short-length')?.value || '45';
-    const shortsCount = document.getElementById('shorts-count')?.value || '5';
-    const btn = document.getElementById('create-btn');
-    
-    btn.disabled = true;
-    btn.textContent = 'Загружаем...';
-    
-    try {
-        const url = document.getElementById('video-url')?.value || '';
-        if (!url) {
-            btn.disabled = false;
-            btn.textContent = 'Создать Shorts';
-            return alert('Введите URL');
-        }
-        
-        const formData = new FormData();
-        formData.append('url', url);
-        formData.append('short_length', shortLength);
-        formData.append('shorts_count', shortsCount);
-        formData.append('smart_selection', document.querySelector('input[name="smart-mode-url"]:checked')?.value || 'off');
-        formData.append('auto_duration', String(document.getElementById('auto-duration-url')?.checked || false));
-        formData.append('min_short_length', document.getElementById('auto-min-url')?.value || '30');
-        formData.append('max_short_length', document.getElementById('auto-max-url')?.value || '60');
-        formData.append('blurred_bg', String(document.getElementById('blurred-bg-url')?.checked || false));
-        formData.append('crop_fill', String(document.getElementById('crop-fill-url')?.checked || false));
-        formData.append('save_video', String(document.getElementById('save-video-url')?.checked || false));
-        formData.append('save_folder', getSelectedSaveFolder('url'));
-        formData.append('filename_keywords', document.getElementById('filename-keywords')?.value?.trim() || '');
-
-        // Баннер
-        const bUrl = document.getElementById('banner-enabled-url');
-        formData.append('banner_enabled', String(bUrl?.checked || false));
-        if (bUrl?.checked) {
-            formData.append('banner_x', document.getElementById('banner-x-settings')?.value || '0');
-            formData.append('banner_y', document.getElementById('banner-y-settings')?.value || '0');
-            formData.append('banner_w', document.getElementById('banner-w-settings')?.value || '1080');
-            formData.append('banner_h', document.getElementById('banner-h-settings')?.value || '200');
-            formData.append('banner_opacity', document.getElementById('banner-opacity-settings')?.value || '100');
-            formData.append('banner_style', document.getElementById('banner-style-settings')?.value || 'overlay');
-            formData.append('banner_position', document.getElementById('banner-position-settings')?.value || '50');
-            formData.append('banner_duration', document.getElementById('banner-duration-settings')?.value || '3');
-            formData.append('banner_full_duration', String(document.getElementById('banner-full-duration')?.checked || false));
-            const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
-            if (bannerFile) formData.append('banner_file', bannerFile);
-        }
-
-        const response = await fetch('/api/upload-url', {
-            method: 'POST',
-            body: formData
-        });
-        
-        if (!response.ok) {
-            throw new Error('Ошибка сервера: ' + response.status);
-        }
-        
-        const data = await response.json();
-        currentJobId = data.job_id;
-        
-        document.getElementById('progress-section')?.classList.remove('hidden');
-        document.getElementById('results-section')?.classList.add('hidden');
-        document.getElementById('shorts-list').innerHTML = '';
-        btn.textContent = 'Обрабатываем...';
-        startPolling();
-    } catch (e) {
-        alert('Ошибка: ' + e.message);
-        btn.disabled = false;
-        btn.textContent = 'Создать Shorts';
-    }
-}
-
 // Создание Shorts из файла
 async function createShortsFromFile() {
     const shortLength = document.getElementById('short-length-file')?.value || '45';
@@ -1237,6 +1155,7 @@ async function createShortsFromFile() {
             if (xhr.status >= 200 && xhr.status < 300) {
                 const data = JSON.parse(xhr.responseText);
                 currentJobId = data.job_id;
+                if (data.job_id && window._sessionJobs) window._sessionJobs.push(data.job_id);
                 addLog('Файлы загружены! Обработка...', 'success');
                 btn.textContent = 'Обрабатываем...';
                 startPolling();
@@ -2043,51 +1962,3 @@ async function deleteProject(jobId) {
     }
 }
 
-function showCleanupResult(message, type = 'success') {
-    const el = document.getElementById('cleanup-result');
-    if (!el) return;
-    el.textContent = message;
-    el.className = 'mt-4 p-3 rounded-xl border border-gray-700 text-sm ' + (type === 'success' ? 'text-green-400 bg-gray-800' : 'text-red-400 bg-gray-800');
-    el.classList.remove('hidden');
-    setTimeout(() => el.classList.add('hidden'), 5000);
-}
-
-async function cleanupOldProjects() {
-    if (!confirm('Удалить все завершённые/проваленные проекты старше 7 дней?')) return;
-    try {
-        const res = await fetch('/api/jobs/old?days_old=7', { method: 'DELETE' });
-        const data = await res.json();
-        if (data.status === 'success') {
-            showCleanupResult(`Очищено ${data.deleted} проектов`);
-            loadProjects();
-        }
-    } catch (e) {
-        showCleanupResult('Ошибка: ' + e.message, 'error');
-    }
-}
-
-async function cleanupUploads() {
-    if (!confirm('Удалить все входные файлы из uploads? Это большие видео!')) return;
-    try {
-        const res = await fetch('/api/cleanup/uploads', { method: 'DELETE' });
-        const data = await res.json();
-        if (data.status === 'success') {
-            showCleanupResult(`Удалено ${data.deleted} файлов из uploads`);
-        }
-    } catch (e) {
-        showCleanupResult('Ошибка: ' + e.message, 'error');
-    }
-}
-
-async function cleanupOutput() {
-    if (!confirm('Удалить все шортсы из output?')) return;
-    try {
-        const res = await fetch('/api/cleanup/output', { method: 'DELETE' });
-        const data = await res.json();
-        if (data.status === 'success') {
-            showCleanupResult(`Удалено ${data.deleted} файлов из output`);
-        }
-    } catch (e) {
-        showCleanupResult('Ошибка: ' + e.message, 'error');
-    }
-}

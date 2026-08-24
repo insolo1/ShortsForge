@@ -65,6 +65,8 @@ ROLES = {
     "viewer": ["view_all"]
 }
 
+VERSION = "1.0.0"
+
 
 def _ok(data):
     return JSONResponse({"status": "success", **data})
@@ -373,6 +375,7 @@ async def load_preset(name: str):
 @app.get("/api/settings")
 async def get_settings():
     return JSONResponse({
+        "version": VERSION,
         "settings": {
             "crop_mode": _read_env("VIDEO_CROP_MODE", "9:16"),
             "zoom_enabled": _read_env("VIDEO_ZOOM_ENABLE", "0") == "1",
@@ -918,6 +921,38 @@ async def cancel_current_job():
     return {"status": "success", "cancelled_queued": len(queued)}
 
 
+@app.post("/api/cleanup-after-close")
+async def cleanup_after_close(data: dict):
+    """Автоматическое удаление файлов задачи при закрытии страницы."""
+    ids = data.get("job_ids", [])
+    if isinstance(ids, str):
+        ids = [ids]
+    deleted = 0
+    for jid in ids:
+        j = jobs.get(jid)
+        if not j:
+            continue
+        if j.get("status") in ("processing", "queued", "starting", "downloading"):
+            continue  # активные задачи не трогаем
+        for s in j.get("shorts", []):
+            fp = Path(s.get("filepath", ""))
+            if fp.exists():
+                try:
+                    fp.unlink(); deleted += 1
+                except:
+                    pass
+        for inp in list(UPLOAD_DIR.glob(f"{jid}_input*")):
+            try:
+                inp.unlink(); deleted += 1
+            except:
+                pass
+        jobs.pop(jid, None)
+        job_logs.pop(jid, None)
+    save_jobs()
+    save_job_logs()
+    return {"status": "success", "deleted": deleted}
+
+
 # ── Processing endpoints (threaded) ──
 
 def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_count: int,
@@ -1200,70 +1235,6 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
         traceback.print_exc()
     finally:
         loop.close()
-
-
-@app.post("/api/upload-url")
-async def upload_url(
-    url: str = Form(...),
-    short_length: int = Form(45),
-    shorts_count: int = Form(5),
-    smart_selection: str = Form("off"),
-    blurred_bg: bool = Form(False),
-    crop_fill: bool = Form(False),
-    save_video: bool = Form(False),
-    save_folder: str = Form("saved"),
-    banner_enabled: bool = Form(False),
-    banner_x: int = Form(0), banner_y: int = Form(0),
-    banner_w: int = Form(1080), banner_h: int = Form(200), banner_opacity: int = Form(100),
-    banner_file: UploadFile = File(None),
-    banner_style: str = Form("overlay"),
-    banner_position: int = Form(50), banner_duration: int = Form(3),
-    banner_full_duration: bool = Form(False),
-    min_short_length: int = Form(30), max_short_length: int = Form(60),
-    auto_duration: bool = Form(False),
-    filename_keywords: str = Form("")
-):
-    job_id = str(uuid.uuid4())
-    now_str = time.strftime('%Y-%m-%d %H:%M:%S')
-    banner_path = await _save_banner_upload(banner_file, job_id)
-    jobs[job_id] = {"id": job_id, "status": "queued", "progress": 0,
-                     "shorts_count": shorts_count, "short_length": short_length,
-                     "source": "url", "created_at": now_str, "shorts": []}
-    save_jobs()
-    add_job_log(job_id, f"Downloading: {url}", "info")
-
-    # Download in thread
-    def _dl_and_process():
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            video_path = loop.run_until_complete(processor.download_video(url, job_id))
-            add_job_log(job_id, "Video downloaded", "success")
-            jobs[job_id]["progress"] = 5
-            save_jobs()
-            # Continue processing
-            _process_job_thread(
-                job_id, video_path, short_length, shorts_count,
-                blurred_bg, crop_fill, smart_selection,
-                save_video, save_folder,
-                banner_enabled, banner_x, banner_y,
-                banner_w, banner_h, banner_opacity,
-                filename_keywords,
-                banner_path, banner_style, banner_position, banner_duration,
-                banner_full_duration,
-                min_short_length, max_short_length, auto_duration
-            )
-        except Exception as e:
-            jobs[job_id]["status"] = "failed"
-            jobs[job_id]["error"] = str(e)
-            add_job_log(job_id, f"Download error: {e}", "error")
-            save_jobs()
-            save_job_logs()
-        finally:
-            loop.close()
-    queued = _enqueue_job(_dl_and_process, ())
-    return {"job_id": job_id, "status": "queued" if not queued else "started"}
 
 
 @app.post("/api/upload-file")
