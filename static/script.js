@@ -220,6 +220,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     await loadFonts();
     await loadStats();
     await loadSettings();
+    loadApiKeys();
     
     // Smart mode selector
     const smartDescs = {
@@ -352,6 +353,80 @@ document.addEventListener('DOMContentLoaded', async function() {
     console.log('Инициализация завершена');
 });
 
+// API ключи (несколько ключей с авто-переключением)
+async function loadApiKeys() {
+    try {
+        const res = await fetch('/api/settings');
+        const data = await res.json();
+        const s = data.settings;
+        const container = document.getElementById('api-keys-list');
+        if (!container) return;
+
+        const providers = [
+            { id: 'groq', name: 'Groq', color: 'text-orange-400' },
+            { id: 'openai', name: 'OpenAI', color: 'text-emerald-400' }
+        ];
+
+        const html = providers.map(p => {
+            const keys = (s.api_keys && s.api_keys[p.id]) || [];
+            const items = keys.length
+                ? keys.map((k, idx) => `
+                    <div class="flex items-center justify-between gap-2 px-3 py-2 bg-gray-800 rounded-lg border border-gray-700">
+                        <span class="font-mono text-xs text-gray-300">${escapeHtml(k)}</span>
+                        <button type="button" onclick="removeApiKey('${p.id}', ${idx})"
+                            class="px-2 py-1 rounded bg-red-600 hover:bg-red-700 text-xs shrink-0">Удалить</button>
+                    </div>`).join('')
+                : '<div class="text-xs text-gray-600">Нет ключей</div>';
+            return `
+                <div>
+                    <div class="text-xs text-gray-400 mb-1 font-semibold ${p.color}">${p.name}</div>
+                    <div class="space-y-1.5">${items}</div>
+                </div>`;
+        }).join('');
+
+        container.innerHTML = html;
+    } catch (e) {
+        console.error('Ошибка загрузки API ключей:', e);
+    }
+}
+
+async function addApiKey() {
+    const provider = document.getElementById('api-provider')?.value || 'groq';
+    const keyInput = document.getElementById('api-key-input');
+    const key = keyInput?.value?.trim();
+    if (!key) return alert('Введите API ключ');
+
+    try {
+        const res = await fetch('/api/keys/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider, key })
+        });
+        const data = await res.json();
+        if (data.status !== 'success') throw new Error(data.message || 'Ошибка');
+        if (keyInput) keyInput.value = '';
+        loadApiKeys();
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
+async function removeApiKey(provider, index) {
+    if (!confirm('Удалить этот API ключ?')) return;
+    try {
+        const res = await fetch('/api/keys', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider, index })
+        });
+        const data = await res.json();
+        if (data.status !== 'success') throw new Error(data.message || 'Ошибка');
+        loadApiKeys();
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
 // Загрузка настроек
 async function loadSettings() {
     try {
@@ -444,7 +519,6 @@ async function saveSettings() {
             formData.append('api_provider', apiProvider);
             formData.append('api_key', apiKeyVal);
         }
-
         const wordsCountVal = document.getElementById('subtitle-words-count')?.value;
         const wordFadeVal = document.getElementById('subtitle-word-fade')?.checked;
         const wordsCountBackend = wordsCountVal === 'all' ? '999' : (wordsCountVal || '5');
@@ -466,7 +540,10 @@ async function saveSettings() {
         
         const data = await response.json();
         if (data.status === 'success') {
+            const keyInput = document.getElementById('api-key-input');
+            if (keyInput) keyInput.value = '';
             await loadSettings();
+            loadApiKeys();
             btn.textContent = '✓ Сохранено';
             setTimeout(() => {
                 btn.textContent = 'Сохранить настройки';
