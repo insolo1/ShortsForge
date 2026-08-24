@@ -224,6 +224,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     await loadSettings();
     loadApiKeys();
     
+    // ── Оценка времени обработки ──
+    const WHISPER_FACTORS = { base: 1, small: 3.5, medium: 7, 'large-v3-turbo': 4, 'large-v3': 14 };
+    window._videoDurations = { url: null, file: null, integration: null };
+
     // Smart mode selector
     const smartDescs = {
         off: 'Выкл — просто нарезка подряд',
@@ -271,9 +275,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     });
 
     // ── Оценка времени обработки ──
-    const WHISPER_FACTORS = { base: 1, small: 3.5, medium: 7, 'large-v3-turbo': 4, 'large-v3': 14 };
-    window._videoDurations = { url: null, file: null, integration: null };
-
     function getVideoDurationSec(tab) {
         return window._videoDurations[tab] || null;
     }
