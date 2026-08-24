@@ -1728,9 +1728,10 @@ function updateSubtitlePreview() {
 
     const layer = document.getElementById('preview-subtitle-layer');
     if (layer) {
-        const scaledY = Math.round(position * 320 / 1920);
-        layer.style.top = scaledY + 'px';
-        layer.style.bottom = 'auto';
+        // в реальном рендере субтитры привязаны снизу (MarginV = 1920 - position)
+        const bottomMargin = Math.round((1920 - position) * 320 / 1920);
+        layer.style.top = 'auto';
+        layer.style.bottom = bottomMargin + 'px';
     }
 
     const preview = document.getElementById('subtitle-preview');
@@ -1774,11 +1775,17 @@ function updateSubtitlePreview() {
 
 function applyBannerPreview(bannerImg, bannerVideo, bannerLayer, isVideo) {
     if (!window._bannerPreviewUrl) return;
-    const bw = parseInt(document.getElementById('banner-w-settings')?.value || '1080');
-    const bh = parseInt(document.getElementById('banner-h-settings')?.value || '200');
-    const bx = parseInt(document.getElementById('banner-x-settings')?.value || '0');
-    const by = parseInt(document.getElementById('banner-y-settings')?.value || '0');
+    let bw = parseInt(document.getElementById('banner-w-settings')?.value || '1080');
+    let bh = parseInt(document.getElementById('banner-h-settings')?.value || '200');
+    let bx = parseInt(document.getElementById('banner-x-settings')?.value || '0');
+    let by = parseInt(document.getElementById('banner-y-settings')?.value || '0');
     const op = parseInt(document.getElementById('banner-opacity-settings')?.value || '100');
+    const style = document.getElementById('banner-style-settings')?.value || 'overlay';
+    // в режиме "пауза по середине" баннер центрируется — как в реальном рендере
+    if (style === 'pause') {
+        bx = (1080 - bw) / 2 + bx;
+        by = (1920 - bh) / 2 + by;
+    }
     const scaleW = 180 / 1080;
     const scaleH = 320 / 1920;
     const el = isVideo ? bannerVideo : bannerImg;
@@ -1802,7 +1809,8 @@ function initSubtitlePreview() {
                  'subtitle-position', 'subtitle-borderw', 'subtitle-bordercolor', 'subtitle-boxborder', 'subtitle-boxcolor',
                  'subtitle-shadowx', 'subtitle-shadowy', 'subtitle-shadowcolor',
                  'preview-text', 'preview-bg-color',
-                 'banner-x-settings', 'banner-y-settings', 'banner-w-settings', 'banner-h-settings'];
+                 'banner-x-settings', 'banner-y-settings', 'banner-w-settings', 'banner-h-settings',
+                 'banner-style-settings', 'banner-opacity-settings'];
     
     ids.forEach(id => {
         const el = document.getElementById(id);
