@@ -742,7 +742,9 @@ class VideoProcessor:
                 "[va][vb][vc]concat=n=3:v=1:a=0[vid]",
             ]
             has_audio = await self._has_audio(video_path)
-            banner_audio = banner_is_video and await self._has_audio(banner_path)
+            # Звук баннера в паузе отключён: если баннер — кусок того же видео,
+            # его голос повторяется и звучит как эхо. В паузе — тишина.
+            banner_audio = False
             if has_audio:
                 # пауза: видео замирает, а на время баннера звучит аудио баннера (если это MP4)
                 chain_parts.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{T},asetpts=N/SR/TB[aA]")
