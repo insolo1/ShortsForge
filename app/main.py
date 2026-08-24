@@ -487,6 +487,25 @@ async def api_keys_remove(data: dict):
     return _ok({"provider": provider, "keys": [mask_key(k) for k in keys]})
 
 
+@app.get("/api/video-info")
+async def video_info(url: str):
+    """Возвращает длительность видео по URL (YouTube и др.) через yt-dlp, без скачивания."""
+    if not url or not url.strip():
+        return _err("URL required")
+    try:
+        import yt_dlp
+        opts = {"quiet": True, "no_warnings": True, "skip_download": True}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url.strip(), download=False)
+        return _ok({
+            "duration": float(info.get("duration") or 0),
+            "title": info.get("title") or "",
+        })
+    except Exception as e:
+        print(f"[VIDEO-INFO] Error: {e}")
+        return _err(f"Не удалось получить данные: {e}")
+
+
 # ── Jobs / Integration ──
 
 

@@ -204,16 +204,18 @@ document.addEventListener('DOMContentLoaded', async function() {
     safeAddListener('video-file', 'change', (e) => {
         const fileName = document.getElementById('file-name');
         const folderMode = document.getElementById('folder-mode-file')?.checked;
-        if (e.target.files[0]) {
+        const first = folderMode ? (e.target.files[0] || null) : (e.target.files[0] || null);
+        if (first) {
             if (folderMode && e.target.files.length > 1) {
-                const firstPath = e.target.files[0].webkitRelativePath || '';
+                const firstPath = first.webkitRelativePath || '';
                 const folderName = firstPath.split('/')[0] || 'папка';
                 fileName.textContent = `Папка «${folderName}» — ${e.target.files.length} видео`;
             } else {
-                fileName.textContent = 'Выбран: ' + e.target.files[0].name;
+                fileName.textContent = 'Выбран: ' + first.name;
             }
             fileName.classList.remove('hidden');
         }
+        readFileVideoDuration(first, 'file');
     });
     
     initTabs();
@@ -270,6 +272,11 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // ── Оценка времени обработки ──
     const WHISPER_FACTORS = { base: 1, small: 3.5, medium: 7, 'large-v3-turbo': 4, 'large-v3': 14 };
+    window._videoDurations = { url: null, file: null, integration: null };
+
+    function getVideoDurationSec(tab) {
+        return window._videoDurations[tab] || null;
+    }
 
     function fmtTime(sec) {
         if (sec < 60) return '~' + Math.max(1, Math.round(sec)) + ' сек';
@@ -286,7 +293,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     function updateEstimate(tab) {
         const box = document.getElementById('estimate-' + tab);
         if (!box) return;
-        const videoMin = parseFloat(document.getElementById('video-duration-' + tab)?.value) || 20;
+        const knownDur = getVideoDurationSec(tab);
+        const videoSec = knownDur || 1200;   // запасной вариант — 20 мин
         const count = parseInt(document.getElementById(
             tab === 'url' ? 'shorts-count' : tab === 'file' ? 'shorts-count-file' : 'integration-shorts-count'
         )?.value) || 5;
@@ -301,7 +309,6 @@ document.addEventListener('DOMContentLoaded', async function() {
         const whisper = document.getElementById('whisper-model')?.value || 'base';
         const mode = getTabMode(tab);
 
-        const videoSec = videoMin * 60;
         const wf = WHISPER_FACTORS[whisper] || 1;
         const transcribe = count * segLen * 0.1 * wf;          // Whisper на GPU
         const render = count * segLen * 0.25;                  // ffmpeg (NVENC + blur + субтитры)
@@ -310,7 +317,17 @@ document.addEventListener('DOMContentLoaded', async function() {
         const ai = count * 2;                                  // AI-метаданные
 
         const perShort = (transcribe + render) / count + ai / count + (auto ? 3 : 0);
-        const total = transcribe + render + selection + autoTime + ai;
+        let total = transcribe + render + selection + autoTime + ai;
+
+        // режим папки: несколько видео → умножаем общее время
+        let videosCount = 1;
+        if (tab === 'file') {
+            const folderMode = document.getElementById('folder-mode-file')?.checked;
+            const files = document.getElementById('video-file')?.files;
+            if (folderMode && files && files.length > 1) videosCount = files.length;
+        }
+        if (videosCount > 1) total = total * videosCount;
+        const countLabel = videosCount > 1 ? `${count} шт × ${videosCount} видео` : `${count} шт`;
 
         const parts = [];
         if (mode !== 'off') parts.push('отбор моментов ' + fmtTime(selection));
@@ -319,10 +336,15 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (auto) parts.push('авто-длина ' + fmtTime(autoTime));
         parts.push('AI ' + fmtTime(ai));
 
+        const durText = knownDur
+            ? 'Длительность видео: ' + fmtTime(knownDur)
+            : (tab === 'file' ? 'Длительность определится после выбора файла' : 'Длительность определится после ввода ссылки');
+
         box.innerHTML = `
-            <div class="text-gray-400 text-xs mb-1">Ориентировочно (${whisper}, ${mode === 'off' ? 'просто нарезка' : mode}, ${count} шт):</div>
+            <div class="text-gray-400 text-xs mb-1">${durText}</div>
+            <div class="text-gray-400 text-xs mb-1">Ориентировочно (${whisper}, ${mode === 'off' ? 'просто нарезка' : mode}, ${countLabel}):</div>
             <div class="text-purple-300">1 шортс — ${fmtTime(perShort)}</div>
-            <div class="text-gray-300">все ${count} — ${fmtTime(total)}</div>
+            <div class="text-gray-300">всего — ${fmtTime(total)}</div>
             <div class="text-gray-500 text-xs mt-1">${parts.join(' • ')}</div>
         `;
     }
@@ -330,7 +352,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     function initEstimates() {
         ['url', 'file', 'integration'].forEach(tab => {
             const ids = [
-                'video-duration-' + tab,
                 tab === 'url' ? 'shorts-count' : tab === 'file' ? 'shorts-count-file' : 'integration-shorts-count',
                 tab === 'url' ? 'short-length' : tab === 'file' ? 'short-length-file' : 'integration-short-length',
                 'auto-min-' + tab, 'auto-max-' + tab, 'auto-duration-' + tab, 'whisper-model'
@@ -346,6 +367,44 @@ document.addEventListener('DOMContentLoaded', async function() {
     }
     initEstimates();
     ['url', 'file', 'integration'].forEach(tab => updateEstimate(tab));
+
+    // ── Авто-определение длительности видео ──
+    function readFileVideoDuration(file, tab) {
+        window._videoDurations[tab] = null;
+        if (!file || !file.type.startsWith('video/')) { updateEstimate(tab); return; }
+        const objUrl = URL.createObjectURL(file);
+        const v = document.createElement('video');
+        v.preload = 'metadata';
+        v.muted = true;
+        v.onloadedmetadata = () => {
+            if (isFinite(v.duration) && v.duration > 0) window._videoDurations[tab] = v.duration;
+            URL.revokeObjectURL(objUrl);
+            updateEstimate(tab);
+        };
+        v.onerror = () => { URL.revokeObjectURL(objUrl); updateEstimate(tab); };
+        v.src = objUrl;
+    }
+
+    let _urlDurTimer = null;
+    const urlInput = document.getElementById('video-url');
+    if (urlInput) {
+        urlInput.addEventListener('input', () => {
+            clearTimeout(_urlDurTimer);
+            _urlDurTimer = setTimeout(async () => {
+                const url = urlInput.value.trim();
+                window._videoDurations.url = null;
+                if (!url) { updateEstimate('url'); return; }
+                try {
+                    const res = await fetch('/api/video-info?url=' + encodeURIComponent(url));
+                    const data = await res.json();
+                    if (data.status === 'success' && data.duration) {
+                        window._videoDurations.url = data.duration;
+                    }
+                } catch (e) {}
+                updateEstimate('url');
+            }, 1200);
+        });
+    }
     
     
     // Переключатели
@@ -353,6 +412,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         const isFile = e.target.value === 'file';
         document.getElementById('integration-url-input').classList.toggle('hidden', isFile);
         document.getElementById('integration-file-input').classList.toggle('hidden', !isFile);
+        if (isFile) updateEstimate('integration');
+    });
+
+    document.getElementById('integration-video-file').addEventListener('change', (e) => {
+        readFileVideoDuration(e.target.files[0], 'integration');
     });
     
     document.getElementById('distribution-mode').addEventListener('change', (e) => {
@@ -417,7 +481,9 @@ document.addEventListener('DOMContentLoaded', async function() {
                 }
             } catch(e) { console.warn('Folder mode error:', e); }
             fileInput.value = '';
+            window._videoDurations.file = null;
             document.getElementById('file-name').classList.add('hidden');
+            updateEstimate('file');
         });
     }
     
