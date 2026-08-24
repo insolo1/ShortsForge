@@ -73,11 +73,10 @@
                 <button onclick="window.location.href='/notes'" class="px-4 py-2 rounded-xl bg-yellow-600 hover:bg-yellow-700 transition text-sm">
                     Заметки
                 </button>
-                <button onclick="window.location.href='/admin'" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 transition text-sm">
-                    Админ
+                <button id="admin-btn" onclick="window.location.href='/admin'" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 transition text-sm hidden">
+                    Панель доступа
                 </button>
 
-                
                 <span id="username-display" class="text-gray-400 flex items-center"></span>
                 <button id="logout-btn" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 transition text-sm">
                     Выход
@@ -932,6 +931,6 @@
         <div id="shorts-list" class="space-y-6"></div>
     </div>
 
-    <script src="/static/script.js?v=18"></script>
+    <script src="/static/script.js?v=19"></script>
 </body>
 </html>

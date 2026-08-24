@@ -162,7 +162,26 @@ async function logout() {
 // Инициализация после загрузки страницы
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('Страница загружена');
-    
+
+    // Имя пользователя + кнопка панели доступа (только для админа)
+    const _uname = localStorage.getItem('username');
+    const unameEl = document.getElementById('username-display');
+    if (unameEl && _uname) unameEl.textContent = _uname;
+    if (localStorage.getItem('isAdmin') === '1') {
+        const adminBtn = document.getElementById('admin-btn');
+        if (adminBtn) adminBtn.classList.remove('hidden');
+    }
+    async function checkMe() {
+        try {
+            const res = await fetch('/api/me');
+            const data = await res.json();
+            if (data.username && unameEl) unameEl.textContent = data.username;
+            const adminBtn = document.getElementById('admin-btn');
+            if (adminBtn) adminBtn.classList.toggle('hidden', !data.admin);
+        } catch (e) {}
+    }
+    checkMe();
+
     safeAddListener('tab-file', 'click', () => switchTab('file'));
     safeAddListener('tab-settings', 'click', () => switchTab('settings'));
     safeAddListener('tab-integration', 'click', () => switchTab('integration'));

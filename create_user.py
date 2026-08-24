@@ -4,7 +4,8 @@
 Запуск из папки проекта:
     python create_user.py
 
-Добавляет пользователя в users.json (пароль хранится как sha256).
+users.json хранится как словарь:
+    { "логин": {"password": "<sha256>", "admin": true/false} }
 """
 import hashlib
 import json
@@ -12,7 +13,6 @@ import sys
 from pathlib import Path
 
 USERS_FILE = Path(__file__).parent / "users.json"
-ROLES = {"admin", "editor", "viewer"}
 
 
 def hsh(pwd: str) -> str:
@@ -30,22 +30,27 @@ def main():
         print("Пароль слишком короткий (мин. 4 символа)")
         sys.exit(1)
 
-    role = input("Роль (admin/editor/viewer) [admin]: ").strip() or "admin"
-    if role not in ROLES:
-        role = "admin"
+    admin_raw = input("Админ? (y/N): ").strip().lower()
+    is_admin = admin_raw in ("y", "yes", "да", "1")
 
-    data = json.loads(USERS_FILE.read_text(encoding="utf-8")) if USERS_FILE.exists() else []
+    users = {}
+    if USERS_FILE.exists():
+        try:
+            data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                users = data
+            elif isinstance(data, list):
+                for u in data:
+                    users[u.get("username", "")] = {
+                        "password": u.get("password", ""),
+                        "admin": u.get("role") == "admin" or bool(u.get("admin"))
+                    }
+        except Exception:
+            pass
 
-    for u in data:
-        if u.get("username") == username:
-            u["password"] = hsh(password)
-            u["role"] = role
-            break
-    else:
-        data.append({"username": username, "password": hsh(password), "role": role})
-
-    USERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"OK: пользователь '{username}' (роль {role}) создан в users.json")
+    users[username] = {"password": hsh(password), "admin": is_admin}
+    USERS_FILE.write_text(json.dumps(users, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"OK: '{username}' (админ={is_admin}) сохранён в users.json")
 
 
 if __name__ == "__main__":

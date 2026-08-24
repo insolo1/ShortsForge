@@ -57,6 +57,7 @@
                 if (response.ok) {
                     localStorage.setItem('token', data.token);
                     localStorage.setItem('username', username);
+                    localStorage.setItem('isAdmin', data.admin ? '1' : '0');
                     window.location.href = '/';
                 } else {
                     errorMsg.textContent = data.detail || 'Ошибка входа';

@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 import json
 import time
@@ -61,8 +61,7 @@ YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 
 ROLES = {
     "admin": ["create_shorts", "delete_shorts", "manage_accounts", "settings", "cleanup", "view_all", "delete_all"],
-    "editor": ["create_shorts", "view_all"],
-    "viewer": ["view_all"]
+    "user": ["create_shorts", "view_all"]
 }
 
 VERSION = "1.0.0"
@@ -179,7 +178,18 @@ def add_job_log(job_id: str, message: str, log_type: str = "info"):
 
 
 def load_users():
-    return _load_json(USERS_FILE)
+    """РџРѕР»СЊР·РѕРІР°С‚РµР»Рё РІ РІРёРґРµ СЃР»РѕРІР°СЂСЏ: {Р»РѕРіРёРЅ: {"password": sha256, "admin": bool}}.
+    РџРѕРґРґРµСЂР¶РёРІР°РµС‚ Рё СЃС‚Р°СЂС‹Р№ С„РѕСЂРјР°С‚-СЃРїРёСЃРѕРє (РјРёРіСЂР°С†РёСЏ РІ РїР°РјСЏС‚Рё)."""
+    data = _load_json(USERS_FILE)
+    if isinstance(data, list):
+        users = {}
+        for u in data:
+            users[u.get("username", "")] = {
+                "password": u.get("password", ""),
+                "admin": u.get("role") == "admin" or bool(u.get("admin"))
+            }
+        return users
+    return data if isinstance(data, dict) else {}
 
 
 def save_users(users):
@@ -211,7 +221,7 @@ def get_creds(email: str) -> str:
     return str(f) if f.exists() else str(BASE_DIR / "client_secret.json")
 
 
-# ── Попробуем подключить новые модули (необязательно) ──
+# в”Ђв”Ђ РџРѕРїСЂРѕР±СѓРµРј РїРѕРґРєР»СЋС‡РёС‚СЊ РЅРѕРІС‹Рµ РјРѕРґСѓР»Рё (РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ) в”Ђв”Ђ
 _use_db = False
 try:
     from app.core.database import init_db, close_db, get_session
@@ -220,7 +230,7 @@ try:
 except Exception as e:
     print(f"[DB] Not available (non-fatal): {e}")
 
-# ── Lifespan ──
+# в”Ђв”Ђ Lifespan в”Ђв”Ђ
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if _use_db:
@@ -243,13 +253,21 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
-# ── Старые (JSON-based) роуты ──
+# в”Ђв”Ђ РЎС‚Р°СЂС‹Рµ (JSON-based) СЂРѕСѓС‚С‹ в”Ђв”Ђ
 
 def verify(request: Request):
     token = request.headers.get('Authorization') or request.cookies.get('token')
     if not token or token not in sessions:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return sessions[token]
+
+
+def _is_admin(sess) -> bool:
+    if not sess:
+        return False
+    if "admin" in sess:
+        return bool(sess.get("admin"))
+    return sess.get("role") == "admin"
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -272,6 +290,8 @@ async def admin_page(request: Request):
     t = request.cookies.get('token')
     if not t or t not in sessions:
         return RedirectResponse(url='/login')
+    if not _is_admin(sessions[t]):
+        return RedirectResponse(url='/')
     async with aiofiles.open(BASE_DIR / "static" / "admin.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=await f.read())
 
@@ -288,15 +308,22 @@ async def notes_page(request: Request):
 @app.post("/api/login")
 async def login(username: str = Form(...), password: str = Form(...)):
     users = load_users()
-    user = next((u for u in users if u['username'] == username and u['password'] == hsh(password)), None)
-    if not user:
-        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+    user = users.get(username)
+    if not user or user.get("password") != hsh(password):
+        raise HTTPException(status_code=401, detail="РќРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ РёР»Рё РїР°СЂРѕР»СЊ")
+    is_admin = bool(user.get("admin"))
     token = str(uuid.uuid4())
-    sessions[token] = {"username": username, "role": user.get("role", "viewer")}
+    sessions[token] = {"username": username, "admin": is_admin}
     _save_json(SESSIONS_FILE, sessions)
-    resp = JSONResponse({"token": token, "username": username, "role": user.get("role", "viewer")})
+    resp = JSONResponse({"token": token, "username": username, "admin": is_admin})
     resp.set_cookie("token", token, httponly=False, max_age=86400*30, path="/", samesite="lax")
     return resp
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    s = verify(request)
+    return {"username": s.get("username"), "admin": bool(s.get("admin"))}
 
 
 @app.post("/api/logout")
@@ -312,27 +339,24 @@ async def logout(request: Request):
 @app.get("/api/users")
 async def get_users(request: Request):
     s = verify(request)
-    if s.get("role") != "admin":
+    if not _is_admin(s):
         raise HTTPException(status_code=403, detail="Admin required")
-    return {"status": "success", "users": [{"username": u["username"], "role": u.get("role", "viewer")} for u in load_users()]}
+    users = load_users()
+    return {"status": "success", "users": [
+        {"username": u, "admin": bool(v.get("admin"))} for u, v in users.items()
+    ]}
 
 
 @app.post("/api/users")
-async def create_user(request: Request, username: str = Form(...), password: str = Form(...), role: str = Form("viewer")):
+async def create_user(request: Request, username: str = Form(...), password: str = Form(...), admin: bool = Form(False)):
+    """РЎРѕР·РґР°С‘С‚/РѕР±РЅРѕРІР»СЏРµС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ. Р•СЃР»Рё РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ СѓР¶Рµ РµСЃС‚СЊ вЂ” СЃР±СЂР°СЃС‹РІР°РµС‚ РїР°СЂРѕР»СЊ (РґРѕСЃС‚СѓРї)."""
     s = verify(request)
-    if s.get("role") != "admin":
+    if not _is_admin(s):
         raise HTTPException(status_code=403, detail="Admin required")
     if len(password) < 4:
-        raise HTTPException(status_code=400, detail="Пароль слишком короткий (мин. 4 символа)")
-    if role not in ROLES:
-        role = "viewer"
+        raise HTTPException(status_code=400, detail="РџР°СЂРѕР»СЊ СЃР»РёС€РєРѕРј РєРѕСЂРѕС‚РєРёР№ (РјРёРЅ. 4 СЃРёРјРІРѕР»Р°)")
     users = load_users()
-    i = next((idx for idx, u in enumerate(users) if u["username"] == username), -1)
-    d = {"username": username, "password": hsh(password), "role": role}
-    if i >= 0:
-        users[i] = d
-    else:
-        users.append(d)
+    users[username] = {"password": hsh(password), "admin": bool(admin)}
     save_users(users)
     return {"status": "success"}
 
@@ -340,11 +364,13 @@ async def create_user(request: Request, username: str = Form(...), password: str
 @app.delete("/api/users/{username}")
 async def delete_user(username: str, request: Request):
     s = verify(request)
-    if s.get("role") != "admin":
+    if not _is_admin(s):
         raise HTTPException(status_code=403, detail="Admin required")
     if username == s.get("username"):
-        raise HTTPException(status_code=400, detail="Нельзя удалить самого себя")
-    save_users([u for u in load_users() if u["username"] != username])
+        raise HTTPException(status_code=400, detail="РќРµР»СЊР·СЏ СѓРґР°Р»РёС‚СЊ СЃР°РјРѕРіРѕ СЃРµР±СЏ")
+    users = load_users()
+    users.pop(username, None)
+    save_users(users)
     return {"status": "success"}
 
 
@@ -437,7 +463,7 @@ async def update_settings(
 ):
     from dotenv import set_key, unset_key, load_dotenv
 
-    # Сохраняем новый API-ключ в общий список ключей (failover)
+    # РЎРѕС…СЂР°РЅСЏРµРј РЅРѕРІС‹Р№ API-РєР»СЋС‡ РІ РѕР±С‰РёР№ СЃРїРёСЃРѕРє РєР»СЋС‡РµР№ (failover)
     if api_key and api_provider in ("groq", "openai"):
         add_key(api_provider, api_key)
 
@@ -507,7 +533,7 @@ async def api_keys_remove(data: dict):
 
 @app.get("/api/video-info")
 async def video_info(url: str):
-    """Возвращает длительность видео по URL (YouTube и др.) через yt-dlp, без скачивания."""
+    """Р’РѕР·РІСЂР°С‰Р°РµС‚ РґР»РёС‚РµР»СЊРЅРѕСЃС‚СЊ РІРёРґРµРѕ РїРѕ URL (YouTube Рё РґСЂ.) С‡РµСЂРµР· yt-dlp, Р±РµР· СЃРєР°С‡РёРІР°РЅРёСЏ."""
     if not url or not url.strip():
         return _err("URL required")
     try:
@@ -521,13 +547,13 @@ async def video_info(url: str):
         })
     except Exception as e:
         print(f"[VIDEO-INFO] Error: {e}")
-        return _err(f"Не удалось получить данные: {e}")
+        return _err(f"РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РґР°РЅРЅС‹Рµ: {e}")
 
 
-# ── Jobs / Integration ──
+# в”Ђв”Ђ Jobs / Integration в”Ђв”Ђ
 
 
-# ── YouTube ──
+# в”Ђв”Ђ YouTube в”Ђв”Ђ
 @app.post("/api/youtube/authorize")
 async def yt_authorize(data: dict):
     email = data.get("email", "")
@@ -685,7 +711,7 @@ async def download_job_zip(job_id: str):
     if not shorts:
         return _err("No shorts", 404)
 
-    # Проверяем что файлы существуют
+    # РџСЂРѕРІРµСЂСЏРµРј С‡С‚Рѕ С„Р°Р№Р»С‹ СЃСѓС‰РµСЃС‚РІСѓСЋС‚
     valid = [s for s in shorts if Path(s.get("filepath", "")).exists()]
     if not valid:
         return _err("No files found on disk", 404)
@@ -693,7 +719,7 @@ async def download_job_zip(job_id: str):
     total_gb = sum(Path(s["filepath"]).stat().st_size for s in valid) / (1024**3)
     print(f"[ZIP] Packing {len(valid)} files ({total_gb:.1f}GB) for job {job_id}...")
 
-    # Генерируем ZIP в temp файле (в отдельном потоке, чтоб не блокировать event loop)
+    # Р“РµРЅРµСЂРёСЂСѓРµРј ZIP РІ temp С„Р°Р№Р»Рµ (РІ РѕС‚РґРµР»СЊРЅРѕРј РїРѕС‚РѕРєРµ, С‡С‚РѕР± РЅРµ Р±Р»РѕРєРёСЂРѕРІР°С‚СЊ event loop)
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, functools.partial(_build_zip, tmp.name, valid))
@@ -711,7 +737,7 @@ async def download_job_zip(job_id: str):
                               headers={"Content-Disposition": f'attachment; filename="shorts_{job_id}.zip"'})
 
 def _build_zip(path: str, shorts: list):
-    """Синхронная сборка ZIP (запускается в thread pool)"""
+    """РЎРёРЅС…СЂРѕРЅРЅР°СЏ СЃР±РѕСЂРєР° ZIP (Р·Р°РїСѓСЃРєР°РµС‚СЃСЏ РІ thread pool)"""
     import zipfile
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         for s in shorts:
@@ -721,7 +747,7 @@ def _build_zip(path: str, shorts: list):
 
 
 async def _save_banner_upload(banner_file, job_id: str) -> str:
-    """Сохраняет загруженный баннер (изображение или видео) в BANNER_DIR."""
+    """РЎРѕС…СЂР°РЅСЏРµС‚ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ Р±Р°РЅРЅРµСЂ (РёР·РѕР±СЂР°Р¶РµРЅРёРµ РёР»Рё РІРёРґРµРѕ) РІ BANNER_DIR."""
     if not banner_file or not banner_file.filename:
         return None
     ext = Path(banner_file.filename).suffix or ".png"
@@ -735,7 +761,7 @@ async def _save_banner_upload(banner_file, job_id: str) -> str:
     return str(path)
 
 
-# ── Admin ──
+# в”Ђв”Ђ Admin в”Ђв”Ђ
 @app.get("/api/admin/analytics")
 async def analytics():
     from datetime import datetime, timedelta
@@ -807,7 +833,7 @@ async def analyze(data: dict):
     return {"channel": {"title": sn.get('title', ''), "subscribers": int(st.get('subscriberCount', 0)), "views": int(st.get('viewCount', 0))}, "videos": videos}
 
 
-# ── Missing frontend routes ──
+# в”Ђв”Ђ Missing frontend routes в”Ђв”Ђ
 
 SAVED_DIR = BASE_DIR / "saved"
 
@@ -938,7 +964,7 @@ async def cancel_current_job():
 
 @app.post("/api/cleanup-after-close")
 async def cleanup_after_close(data: dict):
-    """Автоматическое удаление файлов задачи при закрытии страницы."""
+    """РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРѕРµ СѓРґР°Р»РµРЅРёРµ С„Р°Р№Р»РѕРІ Р·Р°РґР°С‡Рё РїСЂРё Р·Р°РєСЂС‹С‚РёРё СЃС‚СЂР°РЅРёС†С‹."""
     ids = data.get("job_ids", [])
     if isinstance(ids, str):
         ids = [ids]
@@ -948,7 +974,7 @@ async def cleanup_after_close(data: dict):
         if not j:
             continue
         if j.get("status") in ("processing", "queued", "starting", "downloading"):
-            continue  # активные задачи не трогаем
+            continue  # Р°РєС‚РёРІРЅС‹Рµ Р·Р°РґР°С‡Рё РЅРµ С‚СЂРѕРіР°РµРј
         for s in j.get("shorts", []):
             fp = Path(s.get("filepath", ""))
             if fp.exists():
@@ -968,7 +994,7 @@ async def cleanup_after_close(data: dict):
     return {"status": "success", "deleted": deleted}
 
 
-# ── Processing endpoints (threaded) ──
+# в”Ђв”Ђ Processing endpoints (threaded) в”Ђв”Ђ
 
 def _process_one_segment(job_id, video_path, seg_index, seg, total,
                          use_smart, full_subtitles, whisper_model,
@@ -976,7 +1002,7 @@ def _process_one_segment(job_id, video_path, seg_index, seg, total,
                          banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity,
                          banner_style, banner_position, banner_duration, banner_full_duration,
                          save_video, save_folder):
-    """Обрабатывает один сегмент в отдельном потоке. Возвращает (index, short_path) или None."""
+    """РћР±СЂР°Р±Р°С‚С‹РІР°РµС‚ РѕРґРёРЅ СЃРµРіРјРµРЅС‚ РІ РѕС‚РґРµР»СЊРЅРѕРј РїРѕС‚РѕРєРµ. Р’РѕР·РІСЂР°С‰Р°РµС‚ (index, short_path) РёР»Рё None."""
     import asyncio
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -987,7 +1013,7 @@ def _process_one_segment(job_id, video_path, seg_index, seg, total,
         add_job_log(job_id, f"[{seg_index+1}/{total}] Processing {seg['start']:.1f}s-{seg['end']:.1f}s", "progress")
 
         if use_smart and full_subtitles and whisper_model == "base":
-            # базовая модель уже отсканировала видео — режем транскрипт под сегмент
+            # Р±Р°Р·РѕРІР°СЏ РјРѕРґРµР»СЊ СѓР¶Рµ РѕС‚СЃРєР°РЅРёСЂРѕРІР°Р»Р° РІРёРґРµРѕ вЂ” СЂРµР¶РµРј С‚СЂР°РЅСЃРєСЂРёРїС‚ РїРѕРґ СЃРµРіРјРµРЅС‚
             seg_subtitles = []
             for w in full_subtitles:
                 if w.get("end", 0) >= seg["start"] and w.get("start", 0) <= seg["end"]:
@@ -998,7 +1024,7 @@ def _process_one_segment(job_id, video_path, seg_index, seg, total,
                     })
             subtitle_segments = seg_subtitles
         else:
-            # транскрибируем сегмент выбранной моделью (для качества субтитров)
+            # С‚СЂР°РЅСЃРєСЂРёР±РёСЂСѓРµРј СЃРµРіРјРµРЅС‚ РІС‹Р±СЂР°РЅРЅРѕР№ РјРѕРґРµР»СЊСЋ (РґР»СЏ РєР°С‡РµСЃС‚РІР° СЃСѓР±С‚РёС‚СЂРѕРІ)
             subtitle_data = loop.run_until_complete(
                 processor.get_subtitles(video_path, seg["start"], seg["end"])
             )
@@ -1060,7 +1086,7 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
         dur = video_info.get("duration", 0)
         add_job_log(job_id, f"Duration: {dur:.1f}s", "info")
 
-        # Для выбора лучших моментов сканируем видео целиком быстрой base-моделью
+        # Р”Р»СЏ РІС‹Р±РѕСЂР° Р»СѓС‡С€РёС… РјРѕРјРµРЅС‚РѕРІ СЃРєР°РЅРёСЂСѓРµРј РІРёРґРµРѕ С†РµР»РёРєРѕРј Р±С‹СЃС‚СЂРѕР№ base-РјРѕРґРµР»СЊСЋ
         use_smart = (smart_selection or "off") != "off" or auto_duration
         whisper_model = _read_env("WHISPER_MODEL", "base")
         full_subtitles = None
@@ -1116,11 +1142,11 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                     add_job_log(job_id, f"Cancelled after {len(results)} shorts", "warning")
                     break
 
-        # собираем результаты в порядке индексов
+        # СЃРѕР±РёСЂР°РµРј СЂРµР·СѓР»СЊС‚Р°С‚С‹ РІ РїРѕСЂСЏРґРєРµ РёРЅРґРµРєСЃРѕРІ
         shorts_list = []
         for i, short_path in sorted(results):
             title = f"#shorts #{i+1}"
-            description = "Подпишись!"
+            description = "РџРѕРґРїРёС€РёСЃСЊ!"
             tags = ["#shorts", "#viral"]
             shorts_list.append({"path": short_path, "title": title, "description": description, "tags": tags})
             jobs[job_id].setdefault("shorts", []).append({
@@ -1182,7 +1208,7 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
 
             remaining = shorts_count - total_made
             per_video = min(shorts_per_video_max, remaining)
-            add_job_log(job_id, f"[Video {vidx+1}/{len(video_paths)}] {fname} — {per_video} shorts", "info")
+            add_job_log(job_id, f"[Video {vidx+1}/{len(video_paths)}] {fname} вЂ” {per_video} shorts", "info")
 
             video_info = loop.run_until_complete(processor.get_video_info(vpath))
             dur = video_info.get("duration", 0)
@@ -1260,7 +1286,7 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                 total_made += 1
 
                 title = f"#shorts #{idx+1}"
-                description = "Подпишись!"
+                description = "РџРѕРґРїРёС€РёСЃСЊ!"
                 tags = ["#shorts", "#viral"]
 
                 jobs[job_id].setdefault("shorts", []).append({
@@ -1417,7 +1443,7 @@ async def upload_folder(
     return {"job_id": job_id, "status": "started" if started else "queued"}
 
 
-# ── Docs page ──
+# в”Ђв”Ђ Docs page в”Ђв”Ђ
 DOCS_DIR = BASE_DIR / "docs"
 DOCS_DIR.mkdir(exist_ok=True)
 
@@ -1433,13 +1459,13 @@ async def docs_list():
 
 
 _DOC_DESCRIPTIONS = {
-    "full_pipeline.md": "Как работает полный цикл: от загрузки видео до готовых шортсов",
-    "git_workflow.md": "Работа с Git: коммиты, ветки, пуши, деплой",
-    "optimal_settings.md": "Какие настройки ставить для разной длины и типа видео",
-    "smart_selection.md": "Умный отбор сегментов: как и зачем",
-    "smart_selection_algo.md": "Детальное описание алгоритмов скоринга и отбора",
-    "termux_setup.md": "Запуск бота на Android через Termux",
-    "youtube_api_credentials.txt": "Как получить credentials для YouTube API (пошагово)",
+    "full_pipeline.md": "РљР°Рє СЂР°Р±РѕС‚Р°РµС‚ РїРѕР»РЅС‹Р№ С†РёРєР»: РѕС‚ Р·Р°РіСЂСѓР·РєРё РІРёРґРµРѕ РґРѕ РіРѕС‚РѕРІС‹С… С€РѕСЂС‚СЃРѕРІ",
+    "git_workflow.md": "Р Р°Р±РѕС‚Р° СЃ Git: РєРѕРјРјРёС‚С‹, РІРµС‚РєРё, РїСѓС€Рё, РґРµРїР»РѕР№",
+    "optimal_settings.md": "РљР°РєРёРµ РЅР°СЃС‚СЂРѕР№РєРё СЃС‚Р°РІРёС‚СЊ РґР»СЏ СЂР°Р·РЅРѕР№ РґР»РёРЅС‹ Рё С‚РёРїР° РІРёРґРµРѕ",
+    "smart_selection.md": "РЈРјРЅС‹Р№ РѕС‚Р±РѕСЂ СЃРµРіРјРµРЅС‚РѕРІ: РєР°Рє Рё Р·Р°С‡РµРј",
+    "smart_selection_algo.md": "Р”РµС‚Р°Р»СЊРЅРѕРµ РѕРїРёСЃР°РЅРёРµ Р°Р»РіРѕСЂРёС‚РјРѕРІ СЃРєРѕСЂРёРЅРіР° Рё РѕС‚Р±РѕСЂР°",
+    "termux_setup.md": "Р—Р°РїСѓСЃРє Р±РѕС‚Р° РЅР° Android С‡РµСЂРµР· Termux",
+    "youtube_api_credentials.txt": "РљР°Рє РїРѕР»СѓС‡РёС‚СЊ credentials РґР»СЏ YouTube API (РїРѕС€Р°РіРѕРІРѕ)",
 }
 
 
@@ -1452,7 +1478,7 @@ async def docs_page():
         f'<div class="desc">{_DOC_DESCRIPTIONS.get(f.name, "")}</div></a>'
         for f in files if f.is_file()
     )
-    return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Доки</title>
+    return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Р”РѕРєРё</title>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh}}
@@ -1469,7 +1495,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 .back:hover{{color:#58a6ff}}
 </style></head>
 <body>
-<div class="header"><h1>📖 Доки</h1><p>Руководства и справка по Video to Shorts Bot</p></div>
+<div class="header"><h1>рџ“– Р”РѕРєРё</h1><p>Р СѓРєРѕРІРѕРґСЃС‚РІР° Рё СЃРїСЂР°РІРєР° РїРѕ Video to Shorts Bot</p></div>
 <div class="container"><div class="doc-grid">{links}</div></div>
 </body></html>""")
 
@@ -1510,7 +1536,7 @@ blockquote{{border-left:3px solid #30363d;padding:.5rem 1rem;margin:.8rem 0;colo
 </style></head>
 <body>
 <div class="container">
-<div class="nav"><a href="/docs-local" class="back">← Назад к списку</a></div>
+<div class="nav"><a href="/docs-local" class="back">в†ђ РќР°Р·Р°Рґ Рє СЃРїРёСЃРєСѓ</a></div>
 <h1>{name_display}</h1>
 {html_body}
 </div>

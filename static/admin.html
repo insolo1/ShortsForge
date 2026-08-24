@@ -164,15 +164,15 @@
                     class="flex-1 p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
                 <input type="password" id="new-user-password" placeholder="Пароль"
                     class="flex-1 p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                <select id="new-user-role" class="p-3 rounded-xl bg-gray-800 border border-gray-700">
-                    <option value="admin">admin</option>
-                    <option value="editor">editor</option>
-                    <option value="viewer">viewer</option>
-                </select>
+                <label class="flex items-center gap-2 px-3 py-3 rounded-xl bg-gray-800 border border-gray-700">
+                    <input type="checkbox" id="new-user-admin" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-300">админ</span>
+                </label>
                 <button id="create-user-btn" class="px-6 py-3 rounded-xl font-bold bg-green-600 hover:bg-green-700 transition">
-                    + Создать
+                    + Создать / сбросить
                 </button>
             </div>
+            <p class="text-xs text-gray-500 mb-3">Если логин уже есть — пароль обновится (сброс доступа).</p>
             <div id="users-list" class="text-sm text-gray-400">
                 <p class="text-gray-500">Загрузка...</p>
             </div>
@@ -484,7 +484,7 @@
                         <div class="flex justify-between items-center gap-3 py-2 border-b border-gray-700">
                             <div>
                                 <span class="text-gray-200">${escapeHtml(u.username)}</span>
-                                <span class="text-xs text-gray-500 ml-2">${escapeHtml(u.role)}</span>
+                                <span class="text-xs ${u.admin ? 'text-purple-400' : 'text-gray-500'} ml-2">${u.admin ? 'админ' : 'пользователь'}</span>
                             </div>
                             <button type="button" onclick="deleteUser('${escapeHtml(u.username)}')"
                                 class="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-xs">Удалить</button>
@@ -498,21 +498,22 @@
         async function createUser() {
             const username = document.getElementById('new-user-username').value.trim();
             const password = document.getElementById('new-user-password').value;
-            const role = document.getElementById('new-user-role').value;
+            const admin = document.getElementById('new-user-admin').checked;
             if (!username || !password) return alert('Введите логин и пароль');
             try {
                 const fd = new URLSearchParams();
                 fd.append('username', username);
                 fd.append('password', password);
-                fd.append('role', role);
+                fd.append('admin', admin ? 'true' : 'false');
                 const res = await fetch('/api/users', { method: 'POST', body: fd });
                 const data = await res.json();
                 if (data.status === 'success') {
                     document.getElementById('new-user-username').value = '';
                     document.getElementById('new-user-password').value = '';
+                    document.getElementById('new-user-admin').checked = false;
                     loadUsers();
                 } else {
-                    alert('Ошибка: ' + (data.message || 'не удалось'));
+                    alert('Ошибка: ' + (data.detail || data.message || 'не удалось'));
                 }
             } catch (e) { alert('Ошибка: ' + e.message); }
         }
