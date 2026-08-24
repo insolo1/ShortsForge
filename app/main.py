@@ -1113,7 +1113,7 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
         )
         add_job_log(job_id, f"Found {len(segments)} segments", "success")
 
-        _seg_args = (job_id, video_path, use_smart, full_subtitles, whisper_model,
+        _seg_args = (use_smart, full_subtitles, whisper_model,
                      blurred_bg, filename_keywords, crop_fill,
                      banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity,
                      banner_style, banner_position, banner_duration, banner_full_duration,
@@ -1126,7 +1126,7 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
             add_job_log(job_id, f"Processing {len(segments)} segments in parallel ({workers} workers)...", "info")
             with ThreadPoolExecutor(max_workers=workers) as ex:
                 futures = [
-                    ex.submit(_process_one_segment, *_seg_args, i, seg, len(segments))
+                    ex.submit(_process_one_segment, job_id, video_path, i, seg, len(segments), *_seg_args)
                     for i, seg in enumerate(segments)
                 ]
                 for f in futures:
@@ -1135,7 +1135,7 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                         results.append(r)
         else:
             for i, seg in enumerate(segments):
-                r = _process_one_segment(*_seg_args, i, seg, len(segments))
+                r = _process_one_segment(job_id, video_path, i, seg, len(segments), *_seg_args)
                 if r:
                     results.append(r)
                 if _cancel_flag:
