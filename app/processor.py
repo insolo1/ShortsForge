@@ -508,19 +508,20 @@ class VideoProcessor:
         return segments
 
     def _bg_filter_chain(self, in_label: str, out_label: str, crop_fill: bool, blurred_bg: bool, suffix: str = "") -> str:
-        """Строит цепочку фоновой обработки (кадрирование/blur/пады) in_label -> out_label."""
+        """Строит цепочку фоновой обработки (кадрирование/blur/пады) in_label -> out_label.
+        Blur считается на уменьшенной копии (540x960) — в ~4 раза быстрее, вид тот же."""
         s = suffix
         if crop_fill:
             return (
                 f"{in_label}split=2[bg_in{s}][fg_in{s}];"
-                f"[bg_in{s}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg{s}];"
+                f"[bg_in{s}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,scale=540:960,boxblur=8,scale=1080:1920[bg{s}];"
                 f"[fg_in{s}]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg{s}];"
                 f"[bg{s}][fg{s}]overlay=0:(H-h)/2,format=yuv420p[{out_label}]"
             )
         if blurred_bg:
             return (
                 f"{in_label}split=2[bg_in{s}][fg_in{s}];"
-                f"[bg_in{s}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=8[bg{s}];"
+                f"[bg_in{s}]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,scale=540:960,boxblur=8,scale=1080:1920[bg{s}];"
                 f"[fg_in{s}]scale=1080:-1[fg{s}];"
                 f"[bg{s}][fg{s}]overlay=0:(H-h)/2,format=yuv420p[{out_label}]"
             )
