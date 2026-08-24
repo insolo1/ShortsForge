@@ -20,6 +20,7 @@ PyJWT>=2.8.0
 # AI
 groq
 openai>=1.0.0
+torch
 
 # Video
 ffmpeg-python>=0.2.0
