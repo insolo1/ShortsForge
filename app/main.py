@@ -942,20 +942,21 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
         dur = video_info.get("duration", 0)
         add_job_log(job_id, f"Duration: {dur:.1f}s", "info")
 
-        # Для выбора лучших моментов транскрибируем видео целиком (один раз)
+        # Для выбора лучших моментов сканируем видео целиком быстрой base-моделью
         use_smart = (smart_selection or "off") != "off" or auto_duration
+        whisper_model = _read_env("WHISPER_MODEL", "base")
         full_subtitles = None
         if use_smart:
-            add_job_log(job_id, f"Transcribing full video for smart selection (Whisper: {_read_env('WHISPER_MODEL', 'base')})...", "info")
+            add_job_log(job_id, "Scanning full video (base model) for smart selection...", "info")
             def _trans_progress(pct):
                 jobs[job_id]["progress"] = max(jobs[job_id].get("progress", 0), 5 + int(pct * 0.1))
                 save_jobs()
-                add_job_log(job_id, f"Transcribing full video... {pct}%", "progress")
+                add_job_log(job_id, f"Scanning full video... {pct}%", "progress")
             full = loop.run_until_complete(
-                processor.get_subtitles(video_path, 0, dur, progress_cb=_trans_progress)
+                processor.get_subtitles(video_path, 0, dur, model_size="base", progress_cb=_trans_progress)
             )
             full_subtitles = full.get("segments", [])
-            add_job_log(job_id, f"Transcript ready: {len(full_subtitles)} words", "info")
+            add_job_log(job_id, f"Scan done: {len(full_subtitles)} words", "info")
 
         segments = loop.run_until_complete(
             processor.extract_segments(
@@ -975,8 +976,8 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                 break
             add_job_log(job_id, f"[{i+1}/{len(segments)}] Processing {seg['start']:.1f}s-{seg['end']:.1f}s", "progress")
 
-            if use_smart and full_subtitles:
-                # режем полную транскрипцию под сегмент (без повторной транскрипции)
+            if use_smart and full_subtitles and whisper_model == "base":
+                # базовая модель уже отсканировала видео — режем транскрипт под сегмент
                 seg_subtitles = []
                 for w in full_subtitles:
                     if w.get("end", 0) >= seg["start"] and w.get("start", 0) <= seg["end"]:
@@ -987,6 +988,7 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                         })
                 subtitle_segments = seg_subtitles
             else:
+                # транскрибируем сегмент выбранной моделью (для качества субтитров)
                 subtitle_data = loop.run_until_complete(
                     processor.get_subtitles(video_path, seg["start"], seg["end"])
                 )
@@ -1088,18 +1090,19 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
             add_job_log(job_id, f"[Video {vidx+1}] Duration: {dur:.1f}s", "info")
 
             use_smart = (smart_selection or "off") != "off" or auto_duration
+            whisper_model = _read_env("WHISPER_MODEL", "base")
             full_subtitles = None
             if use_smart:
-                add_job_log(job_id, f"[Video {vidx+1}] Transcribing full video for smart selection (Whisper: {_read_env('WHISPER_MODEL', 'base')})...", "info")
+                add_job_log(job_id, f"[Video {vidx+1}] Scanning full video (base model) for smart selection...", "info")
                 def _trans_progress(pct):
                     jobs[job_id]["progress"] = max(jobs[job_id].get("progress", 0), 5 + int(pct * 0.1))
                     save_jobs()
-                    add_job_log(job_id, f"[Video {vidx+1}] Transcribing full video... {pct}%", "progress")
+                    add_job_log(job_id, f"[Video {vidx+1}] Scanning full video... {pct}%", "progress")
                 full = loop.run_until_complete(
-                    processor.get_subtitles(vpath, 0, dur, progress_cb=_trans_progress)
+                    processor.get_subtitles(vpath, 0, dur, model_size="base", progress_cb=_trans_progress)
                 )
                 full_subtitles = full.get("segments", [])
-                add_job_log(job_id, f"[Video {vidx+1}] Transcript ready: {len(full_subtitles)} words", "info")
+                add_job_log(job_id, f"[Video {vidx+1}] Scan done: {len(full_subtitles)} words", "info")
 
             segments = loop.run_until_complete(
                 processor.extract_segments(
@@ -1121,7 +1124,7 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                 idx = total_made
                 add_job_log(job_id, f"[{idx+1}/{shorts_count}] Processing {seg['start']:.1f}s-{seg['end']:.1f}s", "progress")
 
-                if use_smart and full_subtitles:
+                if use_smart and full_subtitles and whisper_model == "base":
                     seg_subtitles = []
                     for w in full_subtitles:
                         if w.get("end", 0) >= seg["start"] and w.get("start", 0) <= seg["end"]:

@@ -312,13 +312,18 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         const wf = WHISPER_FACTORS[whisper] || 1;
         const smart = mode !== 'off' || auto;
-        const transcribe = smart ? videoSec * 0.1 * wf : count * segLen * 0.1 * wf;  // смарт — транскрипция всего видео
+        // сканирование всего видео для отбора — всегда base (фактор 1)
+        const scan = smart ? videoSec * 0.1 : 0;
+        // субтитры сегментов выбранной моделью (base-скан переиспользуется для base-модели)
+        const transcribeSeg = (smart && whisper === 'base') ? 0 : count * segLen * 0.1 * wf;
+        const transcribe = scan + transcribeSeg;
         const render = count * segLen * 0.25;                  // ffmpeg (NVENC + blur + субтитры)
-        const selection = mode === 'off' ? 0 : videoSec * 0.25 + 30;  // нейросетевой отбор по всему видео
+        // отбор моментов: ≤2ч — быстрый текстовый анализ; >2ч — нейросеть (медленно)
+        const selection = mode === 'off' ? 0 : (videoSec > 7200 ? videoSec * 0.25 + 30 : 10);
         const autoTime = auto ? count * 3 : 0;                 // уточнение длительности
         const ai = count * 2;                                  // AI-метаданные
 
-        const perShort = (transcribe + render) / count + ai / count + (auto ? 3 : 0);
+        const perShort = (transcribeSeg + render) / count + ai / count + (auto ? 3 : 0);
         let total = transcribe + render + selection + autoTime + ai;
 
         // режим папки: несколько видео → умножаем общее время
@@ -333,7 +338,8 @@ document.addEventListener('DOMContentLoaded', async function() {
 
         const parts = [];
         if (mode !== 'off') parts.push('отбор моментов ' + fmtTime(selection));
-        parts.push('Whisper ' + whisper + ' ' + fmtTime(transcribe));
+        if (scan > 0) parts.push('скан (base) ' + fmtTime(scan));
+        if (transcribeSeg > 0) parts.push('Whisper ' + whisper + ' ' + fmtTime(transcribeSeg));
         parts.push('рендер ' + fmtTime(render));
         if (auto) parts.push('авто-длина ' + fmtTime(autoTime));
         parts.push('AI ' + fmtTime(ai));
