@@ -987,6 +987,12 @@ async def cleanup_after_close(data: dict):
                 inp.unlink(); deleted += 1
             except:
                 pass
+        # файлы баннера этой задачи тоже удаляем (после рендера они не нужны)
+        for b in list(BANNER_DIR.glob(f"banner_{jid}*")):
+            try:
+                b.unlink(); deleted += 1
+            except:
+                pass
         jobs.pop(jid, None)
         job_logs.pop(jid, None)
     save_jobs()
@@ -1046,13 +1052,6 @@ def _process_one_segment(job_id, video_path, seg_index, seg, total,
             add_job_log(job_id, f"[{seg_index+1}/{total}] Video not created", "warning")
             return None
         add_job_log(job_id, f"[{seg_index+1}/{total}] Video created", "success")
-
-        if save_video:
-            saved = SAVED_DIR / (save_folder or "saved")
-            saved.mkdir(parents=True, exist_ok=True)
-            import shutil
-            shutil.copy2(short_path, saved / f"short_{job_id}_{seg_index}.mp4")
-            add_job_log(job_id, f"[{seg_index+1}/{total}] Saved to {save_folder}", "success")
         return (seg_index, short_path)
     except Exception as e:
         add_job_log(job_id, f"[{seg_index+1}/{total}] Segment error: {e}", "error")

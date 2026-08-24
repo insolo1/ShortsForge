@@ -474,16 +474,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Загружаем список аккаунтов при загрузке
     loadAccountsList();
     
-    // Обработчики для сохранения в папку
-    ['file', 'integration'].forEach(tab => {
-        const cb = document.getElementById('save-video-' + tab);
-        if (cb) {
-            cb.addEventListener('change', () => {
-                document.getElementById('save-folder-row-' + tab)?.classList.toggle('hidden', !cb.checked);
-            });
-        }
-    });
-
     // Обработчик для режима папки
     const folderCb = document.getElementById('folder-mode-file');
     const fileInput = document.getElementById('video-file');
@@ -546,8 +536,6 @@ document.addEventListener('DOMContentLoaded', async function() {
         bannerStyleSel.addEventListener('change', syncBannerStyle);
         syncBannerStyle();
     }
-    
-    loadSaveFolders();
     
     console.log('Инициализация завершена');
 });
@@ -1119,8 +1107,6 @@ async function createShortsFromFile() {
         formData.append('max_short_length', document.getElementById('auto-max-file')?.value || '60');
         formData.append('blurred_bg', String(document.getElementById('blurred-bg-file')?.checked || false));
         formData.append('crop_fill', String(document.getElementById('crop-fill-file')?.checked || false));
-        formData.append('save_video', String(document.getElementById('save-video-file')?.checked || false));
-        formData.append('save_folder', getSelectedSaveFolder('file'));
         formData.append('filename_keywords', document.getElementById('filename-keywords')?.value?.trim() || '');
         
         // Баннер
@@ -1407,8 +1393,6 @@ async function startIntegration() {
         formData.append('short_length', document.getElementById('integration-short-length')?.value || '45');
         formData.append('shorts_count', document.getElementById('integration-shorts-count')?.value || '5');
         formData.append('blurred_bg', String(document.getElementById('integration-blurred-bg').checked));
-        formData.append('save_video', String(document.getElementById('save-video-integration').checked));
-        formData.append('save_folder', getSelectedSaveFolder('integration'));
         formData.append('crop_fill', String(document.getElementById('integration-crop-fill')?.checked || false));
         formData.append('smart_selection', document.querySelector('input[name="smart-mode-integration"]:checked')?.value || 'off');
         formData.append('auto_duration', String(document.getElementById('auto-duration-integration')?.checked || false));
@@ -1833,109 +1817,7 @@ function initSubtitlePreview() {
 
 document.addEventListener('DOMContentLoaded', () => {
     initSubtitlePreview();
-    
-    const saveVideoUrl = document.getElementById('save-video-url');
-    if (saveVideoUrl) {
-        saveVideoUrl.addEventListener('change', () => {
-            document.getElementById('save-folder-row-url')?.classList.toggle('hidden', !saveVideoUrl.checked);
-        });
-    }
-    
-    const saveVideoFile = document.getElementById('save-video-file');
-    if (saveVideoFile) {
-        saveVideoFile.addEventListener('change', () => {
-            document.getElementById('save-folder-row-file')?.classList.toggle('hidden', !saveVideoFile.checked);
-        });
-    }
-    
-    const saveVideoInt = document.getElementById('save-video-integration');
-    if (saveVideoInt) {
-        saveVideoInt.addEventListener('change', () => {
-            document.getElementById('save-folder-row-integration')?.classList.toggle('hidden', !saveVideoInt.checked);
-        });
-    }
-    
-    loadSaveFolders();
 });
-
-async function loadSaveFolders() {
-    try {
-        const res = await fetch('/api/saved-folders');
-        const data = await res.json();
-        if (data.status === 'success') {
-            ['save-folder-select-url', 'save-folder-select-file', 'save-folder-select-integration'].forEach(id => {
-                const sel = document.getElementById(id);
-                if (!sel) return;
-                const current = sel.value;
-                sel.innerHTML = '<option value="">-- Выбрать папку --</option>';
-                data.folders.forEach(f => {
-                    const opt = document.createElement('option');
-                    opt.value = f;
-                    opt.textContent = f;
-                    if (f === current) opt.selected = true;
-                    sel.appendChild(opt);
-                });
-            });
-        }
-    } catch (e) {
-        console.log('Failed to load save folders:', e);
-    }
-}
-
-async function createSaveFolder(tab) {
-    const input = document.getElementById('save-folder-' + tab);
-    const name = input?.value?.trim();
-    if (!name) return;
-    
-    try {
-        const res = await fetch('/api/saved-folders', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder: name })
-        });
-        const data = await res.json();
-        if (data.status === 'success') {
-            input.value = '';
-            await loadSaveFolders();
-            const selectId = 'save-folder-select-' + tab;
-            const sel = document.getElementById(selectId);
-            if (sel) sel.value = name;
-        } else {
-            alert('Ошибка: ' + data.message);
-        }
-    } catch (e) {
-        alert('Ошибка: ' + e.message);
-    }
-}
-
-function getSelectedSaveFolder(tab) {
-    const sel = document.getElementById('save-folder-select-' + tab)?.value;
-    const input = document.getElementById('save-folder-' + tab)?.value?.trim();
-    return sel || input || 'saved';
-}
-
-async function deleteSaveFolder(tab) {
-    const sel = document.getElementById('save-folder-select-' + tab);
-    const name = sel?.value;
-    if (!name) return alert('Выберите папку для удаления');
-    if (!confirm('Удалить папку "' + name + '" и все файлы в ней?')) return;
-    
-    try {
-        const res = await fetch('/api/saved-folders', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder: name })
-        });
-        const data = await res.json();
-        if (data.status === 'success') {
-            await loadSaveFolders();
-        } else {
-            alert('Ошибка: ' + data.message);
-        }
-    } catch (e) {
-        alert('Ошибка: ' + e.message);
-    }
-}
 
 async function loadProjects() {
     try {
