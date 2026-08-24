@@ -731,10 +731,11 @@ class VideoProcessor:
             ]
             has_audio = await self._has_audio(video_path)
             if has_audio:
-                # аудио идёт непрерывно (голос продолжается под замороженным кадром)
-                chain_parts.append(f"[0:a]atrim=0:{T},asetpts=N/SR/TB[aA]")
-                chain_parts.append(f"[0:a]atrim=start={T},asetpts=N/SR/TB,adelay={int(D*1000)}:all=1[aC]")
-                chain_parts.append("[aA][aC]concat=n=2:v=0:a=1[aud]")
+                # полная пауза: видео замирает + звук замолкает на время баннера
+                chain_parts.append(f"[0:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{T},asetpts=N/SR/TB[aA]")
+                chain_parts.append(f"[3:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=duration={D},asetpts=N/SR/TB[aS]")
+                chain_parts.append(f"[0:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=start={T},asetpts=N/SR/TB[aC]")
+                chain_parts.append("[aA][aS][aC]concat=n=3:v=0:a=1[aud]")
             filter_chain = ";".join(chain_parts)
             map_video = "[vid]"
             map_audio = "[aud]" if has_audio else None
@@ -745,6 +746,8 @@ class VideoProcessor:
                 cmd_inputs += ["-stream_loop", "-1", "-i", banner_path]
             else:
                 cmd_inputs += ["-loop", "1", "-i", banner_path]
+            if has_audio:
+                cmd_inputs += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
 
             # сдвигаем тайминги субтитров второй половины на длину паузы
             self._shift_ass_times(ass_path, T, D)
