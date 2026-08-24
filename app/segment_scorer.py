@@ -371,76 +371,84 @@ class VisualCache:
 
 def extract_llm_scores_batch(
     transcripts: List[Tuple[float, float, str]],
-    openai_api_key: str,
+    openai_api_keys: List[str],
 ) -> Dict[Tuple[float, float], float]:
     """
     Батчевая LLM-оценка: отправляет все транскрипты в одном запросе.
 
     Параметры:
         transcripts: список (start, end, text)
-        openai_api_key: ключ OpenAI
+        openai_api_keys: список ключей OpenAI — пробует по очереди при лимитах
 
     Возвращает:
         Словарь {(start, end): score}
     """
-    if not openai_api_key or not transcripts:
+    if isinstance(openai_api_keys, str):
+        openai_api_keys = [k for k in (openai_api_keys or "").split(",") if k.strip()]
+    keys = list(openai_api_keys or [])
+    if not keys or not transcripts:
         return {}
 
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=openai_api_key)
+    combined = "\n---\n".join(
+        f"Сегмент {i+1} ({s:.0f}s-{e:.0f}s): {t[:200]}"
+        for i, (s, e, t) in enumerate(transcripts)
+        if len(t.strip()) >= 10
+    )
 
-        combined = "\n---\n".join(
-            f"Сегмент {i+1} ({s:.0f}s-{e:.0f}s): {t[:200]}"
-            for i, (s, e, t) in enumerate(transcripts)
-            if len(t.strip()) >= 10
-        )
-
-        if not combined:
-            return {}
-
-        n_segments = len(transcripts)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Ты эксперт по виральному контенту для YouTube Shorts. "
-                        f"Оцени {n_segments} сегментов по шкале 0-10 (0=скучный, 10=вирусный). "
-                        "Ответь ТОЛЬКО числами через запятую, без объяснений. "
-                        f"Пример для {n_segments} сегментов: 3,7,1,8"
-                    ),
-                },
-                {"role": "user", "content": combined},
-            ],
-            max_tokens=50,
-            temperature=0.3,
-        )
-
-        text = response.choices[0].message.content.strip()
-        scores = [float(x.strip()) for x in text.split(",")]
-
-        result = {}
-        for i, (s, e, t) in enumerate(transcripts):
-            if i < len(scores):
-                result[(s, e)] = min(max(scores[i] / 10.0, 0), 1)
-            else:
-                result[(s, e)] = 0.5
-
-        print(f"[LLM] Scored {len(result)} segments in 1 API call")
-        return result
-
-    except Exception as e:
-        print(f"[LLM BATCH] Error: {e}")
+    if not combined:
         return {}
+
+    n_segments = len(transcripts)
+
+    for api_key in keys:
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ты эксперт по виральному контенту для YouTube Shorts. "
+                            f"Оцени {n_segments} сегментов по шкале 0-10 (0=скучный, 10=вирусный). "
+                            "Ответь ТОЛЬКО числами через запятую, без объяснений. "
+                            f"Пример для {n_segments} сегментов: 3,7,1,8"
+                        ),
+                    },
+                    {"role": "user", "content": combined},
+                ],
+                max_tokens=50,
+                temperature=0.3,
+            )
+
+            text = response.choices[0].message.content.strip()
+            scores = [float(x.strip()) for x in text.split(",")]
+
+            result = {}
+            for i, (s, e, t) in enumerate(transcripts):
+                if i < len(scores):
+                    result[(s, e)] = min(max(scores[i] / 10.0, 0), 1)
+                else:
+                    result[(s, e)] = 0.5
+
+            print(f"[LLM] Scored {len(result)} segments in 1 API call")
+            return result
+
+        except Exception as e:
+            print(f"[LLM BATCH] Key failed, trying next: {e}")
+            continue
+
+    print(f"[LLM BATCH] All {len(keys)} OpenAI keys failed")
+    return {}
 
 
 def extract_features_for_windows(
     video_path: str,
     windows: List[Tuple[float, float]],
     phrases: List[Dict],
-    openai_api_key: str = "",
+    openai_api_keys: List[str] = None,
 ) -> List[Dict]:
     """
     Извлекает все признаки для списка окон за 3 вызова ffmpeg (аудио + видео + LLM)
@@ -450,7 +458,7 @@ def extract_features_for_windows(
         video_path: путь к видео
         windows: список (start, end) — границы окон
         phrases: фразы с таймингами
-        openai_api_key: ключ OpenAI (опционально)
+        openai_api_keys: список ключей OpenAI (опционально)
 
     Возвращает:
         Список словарей с признаками для каждого окна
@@ -544,14 +552,14 @@ def extract_features_for_windows(
         )
         features["score"] = heuristic
 
-        if openai_api_key and len(window_text.strip()) >= 10:
+        if openai_api_keys and len(window_text.strip()) >= 10:
             llm_transcripts.append((start, end, window_text))
 
         results.append(features)
 
     # 3. Батчевый LLM-скоринг (1 API вызов вместо N)
-    if llm_transcripts and openai_api_key:
-        llm_scores = extract_llm_scores_batch(llm_transcripts, openai_api_key)
+    if llm_transcripts and openai_api_keys:
+        llm_scores = extract_llm_scores_batch(llm_transcripts, openai_api_keys)
         for f in results:
             key = (f["start"], f["end"])
             if key in llm_scores:

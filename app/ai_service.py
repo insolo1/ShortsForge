@@ -3,18 +3,67 @@ import json
 from groq import Groq
 from dotenv import load_dotenv
 
+from api_keys import get_keys
+
 load_dotenv()
+
+
+def _is_retryable(err) -> bool:
+    """True если ошибку можно обойти другим API-ключом (лимит/доступ)."""
+    if not err:
+        return False
+    status = getattr(err, "status_code", None)
+    if status in (401, 403, 429):
+        return True
+    code = getattr(err, "code", None)
+    msg = str(getattr(err, "message", "")).lower() + " " + str(err).lower()
+    if code in ("invalid_api_key", "rate_limit_exceeded", "insufficient_quota", "authentication_error", "permission_denied"):
+        return True
+    if any(k in msg for k in ("rate limit", "quota", "too many requests", "invalid api key", "authentication", "unauthorized")):
+        return True
+    return False
 
 
 class AIService:
     def __init__(self):
         self._client = None
         self._api_key = None
-    
+
+    def _build_client(self, api_key: str):
+        return Groq(api_key=api_key)
+
+    def _chat(self, provider: str, model: str, messages: list, temperature: float = 0.8, max_tokens: int = 500):
+        """Отправляет запрос, пробуя каждый ключ по очереди (failover при лимитах)."""
+        keys = get_keys(provider)
+        if not keys:
+            return None
+        last_err = None
+        for key in keys:
+            try:
+                client = self._build_client(key)
+                return client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            except Exception as e:
+                last_err = e
+                print(f"[AI] Key failed ({provider}), trying next: {_is_retryable(e)} -> {e}")
+                if not _is_retryable(e):
+                    break
+        print(f"[AI] All {len(keys)} keys failed for {provider}: {last_err}")
+        raise last_err
+
     @property
     def client(self):
+        """Backward-compat: returns a client for the first available Groq key."""
         load_dotenv(override=True)
-        api_key = os.getenv("GROQ_API_KEY", "")
+        keys = get_keys("groq")
+        if not keys:
+            api_key = os.getenv("GROQ_API_KEY", "")
+            keys = [api_key] if api_key else []
+        api_key = keys[0] if keys else ""
         if api_key and api_key != self._api_key:
             self._client = Groq(api_key=api_key)
             self._api_key = api_key
@@ -24,7 +73,8 @@ class AIService:
         return self._client
     
     async def generate_metadata(self, transcript: str, short_num: int, video_info: dict = None) -> dict:
-        if not self.client:
+        keys = get_keys("groq")
+        if not keys:
             return self._default_metadata(short_num)
         
         video_title = video_info.get("title", "") if video_info else ""
@@ -52,9 +102,9 @@ class AIService:
 
 Выполни задачу для текущих входных данных и верни JSON:"""
 
-            response = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
+            response = self._chat(
+                "groq", "llama-3.3-70b-versatile",
+                [{"role": "user", "content": prompt}],
                 temperature=0.9,
                 max_tokens=500
             )
@@ -83,7 +133,7 @@ class AIService:
     
     async def select_best_segments(self, full_transcript: str, short_length: int = 45) -> list:
         """Выбирает 3 лучших фрагмента из транскрипта по критериям вирусности"""
-        if not self.client:
+        if not get_keys("groq"):
             return []
         
         try:
@@ -110,9 +160,9 @@ class AIService:
 
 Верни только JSON массив без markdown кодовых блоков."""
 
-            response = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
+            response = self._chat(
+                "groq", "llama-3.3-70b-versatile",
+                [{"role": "user", "content": prompt}],
                 temperature=0.8,
                 max_tokens=2000
             )

@@ -33,6 +33,7 @@ import aiofiles
 from processor import VideoProcessor, _read_env
 from ai_service import AIService
 from youtube_api import YouTubeAPI
+from api_keys import get_keys, add_key, remove_key, masked_keys, set_keys
 
 BASE_DIR = Path(__file__).parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -392,6 +393,10 @@ async def get_settings():
             "word_fade": _read_env("SUBTITLE_WORD_FADE", "1") == "1",
             "api_provider": "groq" if _read_env("GROQ_API_KEY") else ("openai" if _read_env("OPENAI_API_KEY") else "groq"),
             "api_key_masked": "***" if (_read_env("GROQ_API_KEY") or _read_env("OPENAI_API_KEY")) else "",
+            "api_keys": {
+                "groq": masked_keys("groq"),
+                "openai": masked_keys("openai"),
+            },
         }
     })
 
@@ -412,9 +417,15 @@ async def update_settings(
 ):
     from dotenv import set_key, unset_key, load_dotenv
 
+    # Сохраняем новый API-ключ в общий список ключей (failover)
+    if api_key and api_provider in ("groq", "openai"):
+        add_key(api_provider, api_key)
+
+    _keys = {"groq": ",".join(get_keys("groq")), "openai": ",".join(get_keys("openai"))}
+
     keys_to_set = {
-        "GROQ_API_KEY": api_key if api_provider == 'groq' and api_key else _read_env('GROQ_API_KEY', ''),
-        "OPENAI_API_KEY": api_key if api_provider == 'openai' and api_key else _read_env('OPENAI_API_KEY', ''),
+        "GROQ_API_KEY": _keys["groq"] or _read_env('GROQ_API_KEY', ''),
+        "OPENAI_API_KEY": _keys["openai"] or _read_env('OPENAI_API_KEY', ''),
         "VIDEO_CROP_MODE": crop_mode,
         "VIDEO_ZOOM_ENABLE": '1' if zoom_enabled else '0',
         "SUBTITLE_FONT": font,
@@ -446,6 +457,31 @@ async def update_settings(
     # Reload env
     load_dotenv(str(env_path), override=True)
     return {"status": "success"}
+
+
+@app.post("/api/keys/add")
+async def api_keys_add(data: dict):
+    provider = (data.get("provider") or "groq").lower()
+    key = (data.get("key") or "").strip()
+    if provider not in ("groq", "openai"):
+        return _err("Provider must be groq or openai")
+    if not key:
+        return _err("Key required")
+    try:
+        keys = add_key(provider, key)
+    except ValueError as e:
+        return _err(str(e))
+    return _ok({"provider": provider, "keys": [mask_key(k) for k in keys]})
+
+
+@app.delete("/api/keys")
+async def api_keys_remove(data: dict):
+    provider = (data.get("provider") or "groq").lower()
+    index = data.get("index", -1)
+    if provider not in ("groq", "openai"):
+        return _err("Provider must be groq or openai")
+    keys = remove_key(provider, index)
+    return _ok({"provider": provider, "keys": [mask_key(k) for k in keys]})
 
 
 # ── Jobs / Integration ──

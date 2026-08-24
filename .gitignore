@@ -7,3 +7,9 @@ __pycache__/
 *.log
 .venv/
 venv/
+api_keys.json
+tokens/
+job_logs.json
+jobs.json
+sessions.json
+users.json

@@ -180,12 +180,13 @@ class VideoProcessor:
         for start in range(0, int(duration - short_length), step):
             end = start + short_length
             windows.append((float(start), float(end)))
-        
-        openai_api_key = _read_env("OPENAI_API_KEY", "")
-        
+
+        from api_keys import get_keys
+        openai_api_keys = get_keys("openai")
+
         # Один вызов: 2 ffmpeg (аудио + видео целиком) + 1 LLM запрос
         candidates = extract_features_for_windows(
-            video_path, windows, phrases, openai_api_key
+            video_path, windows, phrases, openai_api_keys
         )
         
         if not candidates:
