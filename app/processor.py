@@ -737,12 +737,12 @@ class VideoProcessor:
             banner_audio = banner_is_video and await self._has_audio(banner_path)
             if has_audio:
                 # пауза: видео замирает, а на время баннера звучит аудио баннера (если это MP4)
-                chain_parts.append(f"[0:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{T},asetpts=N/SR/TB[aA]")
+                chain_parts.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{T},asetpts=N/SR/TB[aA]")
                 if banner_audio:
-                    chain_parts.append(f"[2:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=duration={D},asetpts=N/SR/TB[aS]")
+                    chain_parts.append(f"[2:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=duration={D},asetpts=N/SR/TB[aS]")
                 else:
-                    chain_parts.append(f"[3:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=duration={D},asetpts=N/SR/TB[aS]")
-                chain_parts.append(f"[0:a]aformat=sample_rates=48000:channel_layouts=stereo,atrim=start={T},asetpts=N/SR/TB[aC]")
+                    chain_parts.append(f"[3:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=duration={D},asetpts=N/SR/TB[aS]")
+                chain_parts.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=start={T},asetpts=N/SR/TB[aC]")
                 chain_parts.append("[aA][aS][aC]concat=n=3:v=0:a=1[aud]")
             filter_chain = ";".join(chain_parts)
             map_video = "[vid]"
@@ -782,7 +782,7 @@ class VideoProcessor:
                     filter_parts.append(f"[vid_out][banner]overlay={banner_x}:{banner_y}[vid_out]")
             filter_chain = ";".join(filter_parts)
             map_video = "[vid_out]"
-            map_audio = "0:a?"
+            map_audio = "0:a:0?"
 
             cmd_inputs = ["-ss", str(segment["start"]), "-t", str(segment["end"] - segment["start"]), "-i", video_path]
             if use_banner:
