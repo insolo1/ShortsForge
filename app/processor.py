@@ -789,7 +789,7 @@ class VideoProcessor:
             map_video = "[vid_out]"
             map_audio = "0:a?"
 
-            cmd_inputs = ["-ss", str(segment["start"]), "-i", video_path]
+            cmd_inputs = ["-ss", str(segment["start"]), "-t", str(segment["end"] - segment["start"]), "-i", video_path]
             if use_banner:
                 cmd_inputs += ["-i", banner_path]
 
