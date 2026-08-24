@@ -46,10 +46,10 @@ PRESETS_FILE = BASE_DIR / "presets.json"
 FONTS_DIR = BASE_DIR / "fonts"
 BANNER_DIR = UPLOAD_DIR / "banners"
 
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
-FONTS_DIR.mkdir(exist_ok=True)
-BANNER_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+FONTS_DIR.mkdir(parents=True, exist_ok=True)
+BANNER_DIR.mkdir(parents=True, exist_ok=True)
 
 processor = VideoProcessor(str(UPLOAD_DIR), str(OUTPUT_DIR))
 ai_service = AIService()
@@ -750,6 +750,7 @@ async def _save_banner_upload(banner_file, job_id: str) -> str:
     """Сохраняет загруженный баннер (изображение или видео) в BANNER_DIR."""
     if not banner_file or not banner_file.filename:
         return None
+    BANNER_DIR.mkdir(parents=True, exist_ok=True)
     ext = Path(banner_file.filename).suffix or ".png"
     path = BANNER_DIR / f"banner_{job_id}{ext}"
     with open(path, "wb") as f:
