@@ -1734,13 +1734,14 @@ function updateSubtitlePreview() {
         preview.style.backgroundColor = previewBg;
     }
 
-    // Баннер в предпросмотре (виден, если выбран файл баннера)
+    // Баннер в предпросмотре (показывается если галочка включена и выбран файл)
+    const bannerEnabled = document.getElementById('banner-enabled-settings')?.checked || false;
     const bannerLayer = document.getElementById('preview-banner-layer');
     const bannerImg = document.getElementById('preview-banner-img');
     const bannerVideo = document.getElementById('preview-banner-video');
     if (bannerLayer && bannerImg) {
         const fileInput = document.getElementById('banner-file-settings');
-        if (fileInput?.files?.[0]) {
+        if (bannerEnabled && fileInput?.files?.[0]) {
             if (!window._bannerPreviewUrl || window._bannerPreviewFile !== fileInput.files[0]) {
                 window._bannerPreviewFile = fileInput.files[0];
                 const isVideo = fileInput.files[0].type.startsWith('video/');
