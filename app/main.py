@@ -905,7 +905,8 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                         banner_w: int, banner_h: int, banner_opacity: int,
                         filename_keywords: str = "",
                         banner_path: str = None, banner_style: str = "overlay",
-                        banner_position: int = 50, banner_duration: int = 3):
+                        banner_position: int = 50, banner_duration: int = 3,
+                        min_short_length: int = 30, max_short_length: int = 60):
     """Run processing in a thread, updating jobs + job_logs"""
     import asyncio
     loop = asyncio.new_event_loop()
@@ -919,7 +920,11 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
         add_job_log(job_id, f"Duration: {dur:.1f}s", "info")
 
         segments = loop.run_until_complete(
-            processor.extract_segments(video_path, short_length, shorts_count)
+            processor.extract_segments(
+                video_path, short_length, shorts_count,
+                smart_selection=smart_selection,
+                min_length=min_short_length, max_length=max_short_length
+            )
         )
         add_job_log(job_id, f"Found {len(segments)} segments", "success")
 
@@ -1001,7 +1006,8 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                            banner_w: int, banner_h: int, banner_opacity: int,
                            filename_keywords: str = "",
                            banner_path: str = None, banner_style: str = "overlay",
-                           banner_position: int = 50, banner_duration: int = 3):
+                           banner_position: int = 50, banner_duration: int = 3,
+                           min_short_length: int = 30, max_short_length: int = 60):
     """Process multiple videos, distributing shorts_count across them"""
     import asyncio
     import math
@@ -1028,7 +1034,11 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
             add_job_log(job_id, f"[Video {vidx+1}] Duration: {dur:.1f}s", "info")
 
             segments = loop.run_until_complete(
-                processor.extract_segments(vpath, short_length, per_video)
+                processor.extract_segments(
+                    vpath, short_length, per_video,
+                    smart_selection=smart_selection,
+                    min_length=min_short_length, max_length=max_short_length
+                )
             )
             add_job_log(job_id, f"[Video {vidx+1}] Found {len(segments)} segments", "info")
 
@@ -1119,6 +1129,7 @@ async def upload_url(
     banner_file: UploadFile = File(None),
     banner_style: str = Form("overlay"),
     banner_position: int = Form(50), banner_duration: int = Form(3),
+    min_short_length: int = Form(30), max_short_length: int = Form(60),
     filename_keywords: str = Form("")
 ):
     job_id = str(uuid.uuid4())
@@ -1148,7 +1159,8 @@ async def upload_url(
                 banner_enabled, banner_x, banner_y,
                 banner_w, banner_h, banner_opacity,
                 filename_keywords,
-                banner_path, banner_style, banner_position, banner_duration
+                banner_path, banner_style, banner_position, banner_duration,
+                min_short_length, max_short_length
             )
         except Exception as e:
             jobs[job_id]["status"] = "failed"
@@ -1178,6 +1190,7 @@ async def upload_file(
     banner_file: UploadFile = File(None),
     banner_style: str = Form("overlay"),
     banner_position: int = Form(50), banner_duration: int = Form(3),
+    min_short_length: int = Form(30), max_short_length: int = Form(60),
     filename_keywords: str = Form("")
 ):
     job_id = str(uuid.uuid4())
@@ -1210,7 +1223,8 @@ async def upload_file(
         banner_enabled, banner_x, banner_y,
         banner_w, banner_h, banner_opacity,
         filename_keywords,
-        banner_path, banner_style, banner_position, banner_duration
+        banner_path, banner_style, banner_position, banner_duration,
+        min_short_length, max_short_length
     ))
 
     return {"job_id": job_id, "status": "started" if started else "queued"}
@@ -1232,6 +1246,7 @@ async def upload_folder(
     banner_file: UploadFile = File(None),
     banner_style: str = Form("overlay"),
     banner_position: int = Form(50), banner_duration: int = Form(3),
+    min_short_length: int = Form(30), max_short_length: int = Form(60),
     filename_keywords: str = Form("")
 ):
     job_id = str(uuid.uuid4())
@@ -1265,7 +1280,8 @@ async def upload_folder(
         banner_enabled, banner_x, banner_y,
         banner_w, banner_h, banner_opacity,
         filename_keywords,
-        banner_path, banner_style, banner_position, banner_duration
+        banner_path, banner_style, banner_position, banner_duration,
+        min_short_length, max_short_length
     ))
 
     return {"job_id": job_id, "status": "started" if started else "queued"}

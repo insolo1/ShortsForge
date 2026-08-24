@@ -198,8 +198,23 @@
                         <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="url" data-mode="hybrid" style="background:#374151;color:#86EFAC">
                             <input type="radio" name="smart-mode-url" value="hybrid" class="hidden"> Гибрид
                         </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="url" data-mode="auto_duration" style="background:#374151;color:#FDE047">
+                            <input type="radio" name="smart-mode-url" value="auto_duration" class="hidden"> Авто
+                        </label>
                     </div>
                     <div id="smart-desc-url" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
+                    <div id="auto-range-url" class="hidden grid grid-cols-2 gap-4 mt-3">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Мин. длина (сек)</label>
+                            <input type="number" id="auto-min-url" value="30" min="15" max="120"
+                                class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Макс. длина (сек)</label>
+                            <input type="number" id="auto-max-url" value="60" min="15" max="180"
+                                class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                        </div>
+                    </div>
                 </div>
 
                 <div class="flex items-center gap-2 mb-4">
@@ -314,8 +329,23 @@
                         <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="file" data-mode="hybrid" style="background:#374151;color:#86EFAC">
                             <input type="radio" name="smart-mode-file" value="hybrid" class="hidden"> Гибрид
                         </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="file" data-mode="auto_duration" style="background:#374151;color:#FDE047">
+                            <input type="radio" name="smart-mode-file" value="auto_duration" class="hidden"> Авто
+                        </label>
                     </div>
                     <div id="smart-desc-file" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
+                    <div id="auto-range-file" class="hidden grid grid-cols-2 gap-4 mt-3">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Мин. длина (сек)</label>
+                            <input type="number" id="auto-min-file" value="30" min="15" max="120"
+                                class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Макс. длина (сек)</label>
+                            <input type="number" id="auto-max-file" value="60" min="15" max="180"
+                                class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                        </div>
+                    </div>
                 </div>
 
                 <div class="flex items-center gap-2 mb-4">
@@ -748,8 +778,23 @@
                         <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="integration" data-mode="hybrid" style="background:#374151;color:#86EFAC">
                             <input type="radio" name="smart-mode-integration" value="hybrid" class="hidden"> Гибрид
                         </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition smart-mode-btn" data-tab="integration" data-mode="auto_duration" style="background:#374151;color:#FDE047">
+                            <input type="radio" name="smart-mode-integration" value="auto_duration" class="hidden"> Авто
+                        </label>
                     </div>
                     <div id="smart-desc-integration" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
+                    <div id="auto-range-integration" class="hidden grid grid-cols-2 gap-4 mt-3">
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Мин. длина (сек)</label>
+                            <input type="number" id="auto-min-integration" value="30" min="15" max="120"
+                                class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-500 mb-1">Макс. длина (сек)</label>
+                            <input type="number" id="auto-max-integration" value="60" min="15" max="180"
+                                class="w-full p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                        </div>
+                    </div>
                 </div>
 
                 <div class="flex items-center gap-2 mb-2">
