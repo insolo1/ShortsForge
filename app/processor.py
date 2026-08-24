@@ -1,4 +1,5 @@
 import os
+import math
 import asyncio
 import subprocess
 import re
@@ -675,6 +676,7 @@ class VideoProcessor:
         use_banner = banner_enabled and banner_path and Path(banner_path).exists()
         pause_mode = use_banner and banner_style == "pause"
         freeze_path = None
+        banner_is_video = bool(use_banner) and Path(banner_path).suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
 
         if pause_mode:
             # ── Режим паузы: видео останавливается в середине, показывается баннер ──
@@ -711,7 +713,6 @@ class VideoProcessor:
 
         if pause_mode:
             fps = await self._get_video_fps(video_path)
-            banner_is_video = Path(banner_path).suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
             opacity = max(0.0, min(1.0, banner_opacity / 100.0))
             bx = (1080 - int(banner_w)) // 2 + int(banner_x)
             by = (1920 - int(banner_h)) // 2 + int(banner_y)
@@ -762,10 +763,19 @@ class VideoProcessor:
         else:
             # ── Overlay режим: баннер поверх всего видео ──
             filter_parts = [self._bg_filter_chain("[0:v]", "vid_out", crop_fill, blurred_bg)]
+            overlay_loops = 1
             if use_banner:
                 banner_scale_filter = f"scale={banner_w}:{banner_h}"
                 opacity = max(0.0, min(1.0, banner_opacity / 100.0))
-                filter_parts.append(f"[1:v]loop=-1:1:0,setpts=N/FRAME_RATE/TB,{banner_scale_filter}[banner]")
+                if banner_is_video:
+                    # видео-баннер: конечное зацикливание (бесконечное -stream_loop -1 виснет)
+                    segdur = segment["end"] - segment["start"]
+                    banner_dur = await self.get_duration(banner_path)
+                    if banner_dur and banner_dur > 0:
+                        overlay_loops = max(1, int(math.ceil(segdur / banner_dur)))
+                    filter_parts.append(f"[1:v]{banner_scale_filter}[banner]")
+                else:
+                    filter_parts.append(f"[1:v]loop=-1:1:0,setpts=N/FRAME_RATE/TB,{banner_scale_filter}[banner]")
                 if opacity < 1.0:
                     filter_parts.append(f"[vid_out][banner]overlay={banner_x}:{banner_y}:format=auto,format=rgba,colorchannelmixer=aa={opacity}[vid_out]")
                 else:
@@ -776,7 +786,10 @@ class VideoProcessor:
 
             cmd_inputs = ["-ss", str(segment["start"]), "-t", str(segment["end"] - segment["start"]), "-i", video_path]
             if use_banner:
-                cmd_inputs += ["-i", banner_path]
+                if banner_is_video:
+                    cmd_inputs += ["-stream_loop", str(overlay_loops), "-i", banner_path]
+                else:
+                    cmd_inputs += ["-i", banner_path]
 
         print(f"[FFMPEG] [{index}] crop_fill={crop_fill}, blurred_bg={blurred_bg}, banner={use_banner}, style={banner_style if use_banner else '-'}, filter={filter_chain[:60]}...")
 
