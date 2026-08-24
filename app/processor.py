@@ -2,6 +2,7 @@ import os
 import asyncio
 import subprocess
 import re
+import threading
 from pathlib import Path
 from typing import List, Dict
 
@@ -23,6 +24,7 @@ def _read_env(key: str, default: str = "") -> str:
 class VideoProcessor:
     _whisper_model = None
     _whisper_model_size = None
+    _whisper_lock = threading.Lock()
     
     def __init__(self, upload_dir: str, output_dir: str):
         self.upload_dir = Path(upload_dir)
@@ -98,23 +100,24 @@ class VideoProcessor:
 
     @classmethod
     def _get_whisper_model(cls, model_size="base"):
-        """Singleton Whisper model - загружается один раз, авто CUDA"""
-        if cls._whisper_model is None or cls._whisper_model_size != model_size:
-            device = "cpu"
-            compute_type = "int8"
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    device = "cuda"
-                    compute_type = "float16"
-                    print(f"[WHISPER] CUDA detected: {torch.cuda.get_device_name(0)}")
-            except ImportError:
-                pass
-            print(f"[WHISPER] Loading model '{model_size}' ({device}, {compute_type})...")
-            from faster_whisper import WhisperModel
-            cls._whisper_model = WhisperModel(model_size, device=device, compute_type=compute_type)
-            cls._whisper_model_size = model_size
-        return cls._whisper_model
+        """Singleton Whisper model - загружается один раз, авто CUDA. Потокобезопасно."""
+        with cls._whisper_lock:
+            if cls._whisper_model is None or cls._whisper_model_size != model_size:
+                device = "cpu"
+                compute_type = "int8"
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        device = "cuda"
+                        compute_type = "float16"
+                        print(f"[WHISPER] CUDA detected: {torch.cuda.get_device_name(0)}")
+                except ImportError:
+                    pass
+                print(f"[WHISPER] Loading model '{model_size}' ({device}, {compute_type})...")
+                from faster_whisper import WhisperModel
+                cls._whisper_model = WhisperModel(model_size, device=device, compute_type=compute_type)
+                cls._whisper_model_size = model_size
+            return cls._whisper_model
     
     async def get_duration(self, video_path: str) -> float:
         print(f"[FFPROBE] Getting duration for: {video_path}")
@@ -772,11 +775,16 @@ class VideoProcessor:
 
         print(f"[FFMPEG] [{index}] crop_fill={crop_fill}, blurred_bg={blurred_bg}, banner={use_banner}, style={banner_style if use_banner else '-'}, filter={filter_chain[:60]}...")
 
-        # GPU или CPU
+        # GPU или CPU (VIDEO_PRESET: fast / medium / high — скорость кодирования)
+        video_preset_env = _read_env("VIDEO_PRESET", "medium").lower()
         if self.gpu_encoder == "h264_nvenc":
             video_codec = "h264_nvenc"
-            video_preset = "p4"
-            video_quality = ["-cq", "18", "-b:v", "20M", "-rc", "vbr"]
+            video_preset = {"fast": "p2", "medium": "p4", "high": "p6"}.get(video_preset_env, "p4")
+            video_quality = {
+                "fast": ["-cq", "20", "-b:v", "15M", "-rc", "vbr"],
+                "medium": ["-cq", "18", "-b:v", "20M", "-rc", "vbr"],
+                "high": ["-cq", "16", "-b:v", "25M", "-rc", "vbr"],
+            }.get(video_preset_env, ["-cq", "18", "-b:v", "20M", "-rc", "vbr"])
         elif self.gpu_encoder == "h264_v4l2m2m":
             video_codec = "h264_v4l2m2m"
             video_preset = ""

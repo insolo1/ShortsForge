@@ -156,6 +156,27 @@
             <div class="space-y-4" id="videos-list">
             </div>
         </div>
+
+        <div class="card rounded-xl p-6 mt-8">
+            <h3 class="text-xl font-semibold mb-4">Пользователи (вход в систему)</h3>
+            <div class="flex flex-col sm:flex-row gap-3 mb-4">
+                <input type="text" id="new-user-username" placeholder="Логин"
+                    class="flex-1 p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                <input type="password" id="new-user-password" placeholder="Пароль"
+                    class="flex-1 p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                <select id="new-user-role" class="p-3 rounded-xl bg-gray-800 border border-gray-700">
+                    <option value="admin">admin</option>
+                    <option value="editor">editor</option>
+                    <option value="viewer">viewer</option>
+                </select>
+                <button id="create-user-btn" class="px-6 py-3 rounded-xl font-bold bg-green-600 hover:bg-green-700 transition">
+                    + Создать
+                </button>
+            </div>
+            <div id="users-list" class="text-sm text-gray-400">
+                <p class="text-gray-500">Загрузка...</p>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -450,6 +471,64 @@
         });
         document.getElementById('analyze-all-btn').addEventListener('click', analyzeAllAccounts);
         document.getElementById('compare-btn').addEventListener('click', updateComparison);
+
+        // ── Пользователи (вход в систему) ──
+        async function loadUsers() {
+            try {
+                const res = await fetch('/api/users');
+                const data = await res.json();
+                const box = document.getElementById('users-list');
+                if (!box) return;
+                if (data.users && data.users.length) {
+                    box.innerHTML = data.users.map(u => `
+                        <div class="flex justify-between items-center gap-3 py-2 border-b border-gray-700">
+                            <div>
+                                <span class="text-gray-200">${escapeHtml(u.username)}</span>
+                                <span class="text-xs text-gray-500 ml-2">${escapeHtml(u.role)}</span>
+                            </div>
+                            <button type="button" onclick="deleteUser('${escapeHtml(u.username)}')"
+                                class="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-xs">Удалить</button>
+                        </div>`).join('');
+                } else {
+                    box.innerHTML = '<p class="text-gray-500">Нет пользователей</p>';
+                }
+            } catch (e) { console.error(e); }
+        }
+
+        async function createUser() {
+            const username = document.getElementById('new-user-username').value.trim();
+            const password = document.getElementById('new-user-password').value;
+            const role = document.getElementById('new-user-role').value;
+            if (!username || !password) return alert('Введите логин и пароль');
+            try {
+                const fd = new URLSearchParams();
+                fd.append('username', username);
+                fd.append('password', password);
+                fd.append('role', role);
+                const res = await fetch('/api/users', { method: 'POST', body: fd });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    document.getElementById('new-user-username').value = '';
+                    document.getElementById('new-user-password').value = '';
+                    loadUsers();
+                } else {
+                    alert('Ошибка: ' + (data.message || 'не удалось'));
+                }
+            } catch (e) { alert('Ошибка: ' + e.message); }
+        }
+
+        async function deleteUser(username) {
+            if (!confirm('Удалить пользователя ' + username + '?')) return;
+            try {
+                const res = await fetch('/api/users/' + encodeURIComponent(username), { method: 'DELETE' });
+                const data = await res.json();
+                if (data.status === 'success') loadUsers();
+                else alert('Ошибка: ' + data.message);
+            } catch (e) { alert('Ошибка: ' + e.message); }
+        }
+
+        document.getElementById('create-user-btn').addEventListener('click', createUser);
+        loadUsers();
 
         loadAnalytics();
         setInterval(loadAnalytics, 300000);

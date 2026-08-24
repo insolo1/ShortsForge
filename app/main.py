@@ -310,12 +310,22 @@ async def logout(request: Request):
 
 
 @app.get("/api/users")
-async def get_users():
+async def get_users(request: Request):
+    s = verify(request)
+    if s.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin required")
     return {"status": "success", "users": [{"username": u["username"], "role": u.get("role", "viewer")} for u in load_users()]}
 
 
 @app.post("/api/users")
-async def create_user(username: str = Form(...), password: str = Form(...), role: str = Form("viewer")):
+async def create_user(request: Request, username: str = Form(...), password: str = Form(...), role: str = Form("viewer")):
+    s = verify(request)
+    if s.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin required")
+    if len(password) < 4:
+        raise HTTPException(status_code=400, detail="Пароль слишком короткий (мин. 4 символа)")
+    if role not in ROLES:
+        role = "viewer"
     users = load_users()
     i = next((idx for idx, u in enumerate(users) if u["username"] == username), -1)
     d = {"username": username, "password": hsh(password), "role": role}
@@ -328,7 +338,12 @@ async def create_user(username: str = Form(...), password: str = Form(...), role
 
 
 @app.delete("/api/users/{username}")
-async def delete_user(username: str):
+async def delete_user(username: str, request: Request):
+    s = verify(request)
+    if s.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin required")
+    if username == s.get("username"):
+        raise HTTPException(status_code=400, detail="Нельзя удалить самого себя")
     save_users([u for u in load_users() if u["username"] != username])
     return {"status": "success"}
 
@@ -955,6 +970,73 @@ async def cleanup_after_close(data: dict):
 
 # ── Processing endpoints (threaded) ──
 
+def _process_one_segment(job_id, video_path, seg_index, seg, total,
+                         use_smart, full_subtitles, whisper_model,
+                         blurred_bg, filename_keywords, crop_fill,
+                         banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity,
+                         banner_style, banner_position, banner_duration, banner_full_duration,
+                         save_video, save_folder):
+    """Обрабатывает один сегмент в отдельном потоке. Возвращает (index, short_path) или None."""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        if _cancel_flag:
+            add_job_log(job_id, f"[{seg_index+1}/{total}] Cancelled", "warning")
+            return None
+        add_job_log(job_id, f"[{seg_index+1}/{total}] Processing {seg['start']:.1f}s-{seg['end']:.1f}s", "progress")
+
+        if use_smart and full_subtitles and whisper_model == "base":
+            # базовая модель уже отсканировала видео — режем транскрипт под сегмент
+            seg_subtitles = []
+            for w in full_subtitles:
+                if w.get("end", 0) >= seg["start"] and w.get("start", 0) <= seg["end"]:
+                    seg_subtitles.append({
+                        "start": max(0.0, w["start"] - seg["start"]),
+                        "end": min(seg["end"] - seg["start"], w["end"] - seg["start"]),
+                        "text": w.get("text", "")
+                    })
+            subtitle_segments = seg_subtitles
+        else:
+            # транскрибируем сегмент выбранной моделью (для качества субтитров)
+            subtitle_data = loop.run_until_complete(
+                processor.get_subtitles(video_path, seg["start"], seg["end"])
+            )
+            subtitle_segments = subtitle_data.get("segments", [])
+        add_job_log(job_id, f"[{seg_index+1}/{total}] Subtitles: {len(subtitle_segments)} words", "info")
+
+        short_path = loop.run_until_complete(
+            processor.create_short(
+                video_path, seg, seg_index, job_id,
+                subtitle_segments,
+                blurred_bg, filename_keywords, crop_fill,
+                banner_enabled, banner_path, banner_x, banner_y,
+                banner_w, banner_h, banner_opacity,
+                banner_style, banner_position, banner_duration,
+                banner_full_duration
+            )
+        )
+        if not short_path or not Path(short_path).exists():
+            add_job_log(job_id, f"[{seg_index+1}/{total}] Video not created", "warning")
+            return None
+        add_job_log(job_id, f"[{seg_index+1}/{total}] Video created", "success")
+
+        if save_video:
+            saved = SAVED_DIR / (save_folder or "saved")
+            saved.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(short_path, saved / f"short_{job_id}_{seg_index}.mp4")
+            add_job_log(job_id, f"[{seg_index+1}/{total}] Saved to {save_folder}", "success")
+        return (seg_index, short_path)
+    except Exception as e:
+        add_job_log(job_id, f"[{seg_index+1}/{total}] Segment error: {e}", "error")
+        import traceback
+        traceback.print_exc()
+        return None
+    finally:
+        loop.close()
+
+
 def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_count: int,
                         blurred_bg: bool, crop_fill: bool, smart_selection: str,
                         save_video: bool, save_folder: str,
@@ -1005,70 +1087,49 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
         )
         add_job_log(job_id, f"Found {len(segments)} segments", "success")
 
+        _seg_args = (job_id, video_path, use_smart, full_subtitles, whisper_model,
+                     blurred_bg, filename_keywords, crop_fill,
+                     banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity,
+                     banner_style, banner_position, banner_duration, banner_full_duration,
+                     save_video, save_folder)
+
+        results = []
+        workers = max(1, int(_read_env("SEGMENT_WORKERS", "2")))
+        if workers > 1 and len(segments) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            add_job_log(job_id, f"Processing {len(segments)} segments in parallel ({workers} workers)...", "info")
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = [
+                    ex.submit(_process_one_segment, *_seg_args, i, seg, len(segments))
+                    for i, seg in enumerate(segments)
+                ]
+                for f in futures:
+                    r = f.result()
+                    if r:
+                        results.append(r)
+        else:
+            for i, seg in enumerate(segments):
+                r = _process_one_segment(*_seg_args, i, seg, len(segments))
+                if r:
+                    results.append(r)
+                if _cancel_flag:
+                    add_job_log(job_id, f"Cancelled after {len(results)} shorts", "warning")
+                    break
+
+        # собираем результаты в порядке индексов
         shorts_list = []
-        for i, seg in enumerate(segments):
-            if _cancel_flag:
-                add_job_log(job_id, f"Cancelled at short {i+1}/{len(segments)}", "warning")
-                break
-            add_job_log(job_id, f"[{i+1}/{len(segments)}] Processing {seg['start']:.1f}s-{seg['end']:.1f}s", "progress")
-
-            if use_smart and full_subtitles and whisper_model == "base":
-                # базовая модель уже отсканировала видео — режем транскрипт под сегмент
-                seg_subtitles = []
-                for w in full_subtitles:
-                    if w.get("end", 0) >= seg["start"] and w.get("start", 0) <= seg["end"]:
-                        seg_subtitles.append({
-                            "start": max(0.0, w["start"] - seg["start"]),
-                            "end": min(seg["end"] - seg["start"], w["end"] - seg["start"]),
-                            "text": w.get("text", "")
-                        })
-                subtitle_segments = seg_subtitles
-            else:
-                # транскрибируем сегмент выбранной моделью (для качества субтитров)
-                subtitle_data = loop.run_until_complete(
-                    processor.get_subtitles(video_path, seg["start"], seg["end"])
-                )
-                subtitle_segments = subtitle_data.get("segments", [])
-            add_job_log(job_id, f"[{i+1}/{len(segments)}] Subtitles: {len(subtitle_segments)} words", "info")
-
-            short_path = loop.run_until_complete(
-                processor.create_short(
-                    video_path, seg, i, job_id,
-                    subtitle_segments,
-                    blurred_bg, filename_keywords, crop_fill,
-                    banner_enabled, banner_path, banner_x, banner_y,
-                    banner_w, banner_h, banner_opacity,
-                    banner_style, banner_position, banner_duration,
-                    banner_full_duration
-                )
-            )
-
-            if not short_path or not Path(short_path).exists():
-                add_job_log(job_id, f"[{i+1}/{len(segments)}] Video not created", "warning")
-                continue
-
-            add_job_log(job_id, f"[{i+1}/{len(segments)}] Video created", "success")
-
+        for i, short_path in sorted(results):
             title = f"#shorts #{i+1}"
             description = "Подпишись!"
             tags = ["#shorts", "#viral"]
-
             shorts_list.append({"path": short_path, "title": title, "description": description, "tags": tags})
-
             jobs[job_id].setdefault("shorts", []).append({
                 "index": i, "filename": Path(short_path).name,
                 "filepath": short_path, "title": title,
                 "description": description, "tags": tags
             })
-            jobs[job_id]["progress"] = 20 + (i + 1) * 40 // len(segments)
-            save_jobs()
-
-            if save_video:
-                saved = SAVED_DIR / (save_folder or "saved")
-                saved.mkdir(parents=True, exist_ok=True)
-                import shutil
-                shutil.copy2(short_path, saved / f"short_{job_id}_{i}.mp4")
-                add_job_log(job_id, f"[{i+1}/{len(segments)}] Saved to {save_folder}", "success")
+        jobs[job_id]["progress"] = 20 + min(70, len(results) * 70 // max(1, len(segments)))
+        save_jobs()
 
         if _cancel_flag:
             jobs[job_id]["status"] = "cancelled"
