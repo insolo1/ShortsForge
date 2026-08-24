@@ -1018,6 +1018,12 @@ def _process_one_segment(job_id, video_path, seg_index, seg, total,
             add_job_log(job_id, f"[{seg_index+1}/{total}] Cancelled", "warning")
             return None
         add_job_log(job_id, f"[{seg_index+1}/{total}] Processing {seg['start']:.1f}s-{seg['end']:.1f}s", "progress")
+        try:
+            n_audio = processor.count_audio_streams(video_path)
+            if n_audio > 1:
+                add_job_log(job_id, f"[{seg_index+1}/{total}] Внимание: в видео {n_audio} аудио-дорожки — берётся первая", "warning")
+        except Exception:
+            pass
 
         if use_smart and full_subtitles and whisper_model == "base":
             # базовая модель уже отсканировала видео — режем транскрипт под сегмент

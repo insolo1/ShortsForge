@@ -587,6 +587,14 @@ class VideoProcessor:
         except Exception:
             return False
 
+    @staticmethod
+    def count_audio_streams(video_path: str) -> int:
+        try:
+            result = subprocess.run([os.getenv("FFMPEG_PATH", "ffmpeg"), "-i", video_path], capture_output=True, text=True, timeout=30)
+            return len(re.findall(r'Stream.*Audio:', result.stderr))
+        except Exception:
+            return 0
+
     
     async def create_short(self, video_path: str, segment: Dict, index: int, job_id: str, subtitle_segments: List[Dict] = None, blurred_bg: bool = False, filename_keywords: str = "", crop_fill: bool = False, banner_enabled: bool = False, banner_path: str = None, banner_x: int = 0, banner_y: int = 0, banner_w: int = 1080, banner_h: int = 200, banner_opacity: int = 100, banner_style: str = "overlay", banner_position: int = 50, banner_duration: int = 3, banner_full_duration: bool = False) -> str:
         kw_part = f"_{filename_keywords}" if filename_keywords else ""
