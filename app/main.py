@@ -64,7 +64,7 @@ ROLES = {
     "user": ["create_shorts", "view_all"]
 }
 
-VERSION = "2.4.1"
+VERSION = "2.5.0"
 
 
 def _ok(data):
@@ -251,6 +251,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Video to Shorts Bot", lifespan=lifespan, docs_url=None, redoc_url=None)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+app.mount("/fonts", StaticFiles(directory=str(FONTS_DIR)), name="fonts")
 
 
 # в”Ђв”Ђ РЎС‚Р°СЂС‹Рµ (JSON-based) СЂРѕСѓС‚С‹ в”Ђв”Ђ
@@ -381,7 +382,7 @@ async def get_roles():
 
 @app.get("/api/fonts")
 async def get_fonts():
-    return {"fonts": ["Arial", "Verdana", "Impact", "Montserrat", "Bebas Neue", "Russo One", "Obelix Pro", "Intro Rust"]}
+    return {"fonts": ["TikTok Sans", "Montserrat Bold", "Montserrat", "Arial", "Verdana", "Impact", "Bebas Neue", "Russo One", "Obelix Pro", "Intro Rust"]}
 
 
 @app.get("/api/presets/list")
@@ -1059,7 +1060,11 @@ def _process_one_segment(job_id, video_path, seg_index, seg, total,
             add_job_log(job_id, f"[{seg_index+1}/{total}] Video not created", "warning")
             return None
         add_job_log(job_id, f"[{seg_index+1}/{total}] Video created", "success")
-        return (seg_index, short_path)
+        transcript_text = " ".join(
+            item.get("text", "").strip() for item in subtitle_segments
+            if item.get("text", "").strip()
+        )
+        return (seg_index, short_path, transcript_text)
     except Exception as e:
         add_job_log(job_id, f"[{seg_index+1}/{total}] Segment error: {e}", "error")
         import traceback
@@ -1151,10 +1156,14 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
 
         # СЃРѕР±РёСЂР°РµРј СЂРµР·СѓР»СЊС‚Р°С‚С‹ РІ РїРѕСЂСЏРґРєРµ РёРЅРґРµРєСЃРѕРІ
         shorts_list = []
-        for i, short_path in sorted(results):
-            title = f"#shorts #{i+1}"
-            description = "РџРѕРґРїРёС€РёСЃСЊ!"
-            tags = ["#shorts", "#viral"]
+        for i, short_path, transcript_text in sorted(results, key=lambda item: item[0]):
+            add_job_log(job_id, f"[{i+1}/{len(results)}] Generating AI metadata...", "info")
+            metadata = loop.run_until_complete(
+                ai_service.generate_metadata(transcript_text, i + 1, video_info)
+            )
+            title = metadata["title"]
+            description = metadata["description"]
+            tags = metadata["tags"]
             shorts_list.append({"path": short_path, "title": title, "description": description, "tags": tags})
             jobs[job_id].setdefault("shorts", []).append({
                 "index": i, "filename": Path(short_path).name,
@@ -1293,9 +1302,17 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                 add_job_log(job_id, f"[{idx+1}/{shorts_count}] Video created", "success")
                 total_made += 1
 
-                title = f"#shorts #{idx+1}"
-                description = "РџРѕРґРїРёС€РёСЃСЊ!"
-                tags = ["#shorts", "#viral"]
+                transcript_text = " ".join(
+                    item.get("text", "").strip() for item in subtitle_segments
+                    if item.get("text", "").strip()
+                )
+                add_job_log(job_id, f"[{idx+1}/{shorts_count}] Generating AI metadata...", "info")
+                metadata = loop.run_until_complete(
+                    ai_service.generate_metadata(transcript_text, idx + 1, video_info)
+                )
+                title = metadata["title"]
+                description = metadata["description"]
+                tags = metadata["tags"]
 
                 jobs[job_id].setdefault("shorts", []).append({
                     "index": idx, "filename": Path(short_path).name,
@@ -1467,13 +1484,13 @@ async def docs_list():
 
 
 _DOC_DESCRIPTIONS = {
-    "full_pipeline.md": "РљР°Рє СЂР°Р±РѕС‚Р°РµС‚ РїРѕР»РЅС‹Р№ С†РёРєР»: РѕС‚ Р·Р°РіСЂСѓР·РєРё РІРёРґРµРѕ РґРѕ РіРѕС‚РѕРІС‹С… С€РѕСЂС‚СЃРѕРІ",
-    "git_workflow.md": "Р Р°Р±РѕС‚Р° СЃ Git: РєРѕРјРјРёС‚С‹, РІРµС‚РєРё, РїСѓС€Рё, РґРµРїР»РѕР№",
-    "optimal_settings.md": "РљР°РєРёРµ РЅР°СЃС‚СЂРѕР№РєРё СЃС‚Р°РІРёС‚СЊ РґР»СЏ СЂР°Р·РЅРѕР№ РґР»РёРЅС‹ Рё С‚РёРїР° РІРёРґРµРѕ",
-    "smart_selection.md": "РЈРјРЅС‹Р№ РѕС‚Р±РѕСЂ СЃРµРіРјРµРЅС‚РѕРІ: РєР°Рє Рё Р·Р°С‡РµРј",
-    "smart_selection_algo.md": "Р”РµС‚Р°Р»СЊРЅРѕРµ РѕРїРёСЃР°РЅРёРµ Р°Р»РіРѕСЂРёС‚РјРѕРІ СЃРєРѕСЂРёРЅРіР° Рё РѕС‚Р±РѕСЂР°",
-    "termux_setup.md": "Р—Р°РїСѓСЃРє Р±РѕС‚Р° РЅР° Android С‡РµСЂРµР· Termux",
-    "youtube_api_credentials.txt": "РљР°Рє РїРѕР»СѓС‡РёС‚СЊ credentials РґР»СЏ YouTube API (РїРѕС€Р°РіРѕРІРѕ)",
+    "full_pipeline.md": "Как работает полный цикл: от загрузки видео до готовых шортсов",
+    "git_workflow.md": "Работа с Git: коммиты, ветки, push и деплой",
+    "optimal_settings.md": "Настройки для разной длины и типа исходного видео",
+    "smart_selection.md": "Smart Selection и «Авто-длительность»: руководство пользователя",
+    "smart_selection_algo.md": "Smart Selection: расширенное описание алгоритмов и Auto-duration",
+    "termux_setup.md": "Запуск бота на Android через Termux",
+    "youtube_api_credentials.txt": "Получение credentials для YouTube API: пошаговая инструкция",
 }
 
 
@@ -1486,7 +1503,7 @@ async def docs_page():
         f'<div class="desc">{_DOC_DESCRIPTIONS.get(f.name, "")}</div></a>'
         for f in files if f.is_file()
     )
-    return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Р”РѕРєРё</title>
+    return HTMLResponse(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Документация</title>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh}}
@@ -1503,7 +1520,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 .back:hover{{color:#58a6ff}}
 </style></head>
 <body>
-<div class="header"><h1>рџ“– Р”РѕРєРё</h1><p>Р СѓРєРѕРІРѕРґСЃС‚РІР° Рё СЃРїСЂР°РІРєР° РїРѕ Video to Shorts Bot</p></div>
+<div class="header"><h1>📖 Документация</h1><p>Руководства и справка по Video to Shorts Bot</p></div>
 <div class="container"><div class="doc-grid">{links}</div></div>
 </body></html>""")
 
@@ -1544,7 +1561,7 @@ blockquote{{border-left:3px solid #30363d;padding:.5rem 1rem;margin:.8rem 0;colo
 </style></head>
 <body>
 <div class="container">
-<div class="nav"><a href="/docs-local" class="back">в†ђ РќР°Р·Р°Рґ Рє СЃРїРёСЃРєСѓ</a></div>
+<div class="nav"><a href="/docs-local" class="back">← Назад к списку</a></div>
 <h1>{name_display}</h1>
 {html_body}
 </div>

@@ -294,5 +294,9 @@
   "c93a4c67-74b2-4284-9ef0-c236058ad479": {
     "username": "qwen1",
     "role": "admin"
+  },
+  "c1f0f3b2-b4b0-4799-a660-428d99676789": {
+    "username": "qwen1",
+    "admin": true
   }
 }

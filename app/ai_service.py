@@ -1,6 +1,7 @@
 import os
 import json
 from groq import Groq
+from openai import OpenAI
 from dotenv import load_dotenv
 
 from api_keys import get_keys
@@ -29,29 +30,48 @@ class AIService:
         self._client = None
         self._api_key = None
 
-    def _build_client(self, api_key: str):
-        return Groq(api_key=api_key)
-
-    def _chat(self, provider: str, model: str, messages: list, temperature: float = 0.8, max_tokens: int = 500):
-        """Отправляет запрос, пробуя каждый ключ по очереди (failover при лимитах)."""
+    def _chat(self, provider: str, model: str, messages: list,
+              temperature: float = 0.8, max_tokens: int = 500) -> str:
+        """Return response text, trying each saved key for the provider."""
         keys = get_keys(provider)
         if not keys:
-            return None
+            raise RuntimeError(f"No API keys configured for {provider}")
+
         last_err = None
         for key in keys:
             try:
-                client = self._build_client(key)
-                return client.chat.completions.create(
+                if provider == "openai":
+                    client = OpenAI(api_key=key)
+                    if hasattr(client, "responses"):
+                        response = client.responses.create(
+                            model=os.getenv("OPENAI_MODEL", "gpt-5.6-luna"),
+                            input=messages,
+                            max_output_tokens=max_tokens,
+                        )
+                        return response.output_text
+                    response = client.chat.completions.create(
+                        model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+                    return response.choices[0].message.content
+
+                client = Groq(api_key=key)
+                response = client.chat.completions.create(
                     model=model,
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+                return response.choices[0].message.content
             except Exception as e:
                 last_err = e
-                print(f"[AI] Key failed ({provider}), trying next: {_is_retryable(e)} -> {e}")
-                if not _is_retryable(e):
+                retryable = _is_retryable(e)
+                print(f"[AI] Key failed ({provider}), trying next: {retryable} -> {e}")
+                if not retryable:
                     break
+
         print(f"[AI] All {len(keys)} keys failed for {provider}: {last_err}")
         raise last_err
 
@@ -73,8 +93,10 @@ class AIService:
         return self._client
     
     async def generate_metadata(self, transcript: str, short_num: int, video_info: dict = None) -> dict:
-        keys = get_keys("groq")
-        if not keys:
+        providers = [
+            provider for provider in ("groq", "openai") if get_keys(provider)
+        ]
+        if not providers:
             return self._default_metadata(short_num)
         
         video_title = video_info.get("title", "") if video_info else ""
@@ -102,14 +124,23 @@ class AIService:
 
 Выполни задачу для текущих входных данных и верни JSON:"""
 
-            response = self._chat(
-                "groq", "llama-3.3-70b-versatile",
-                [{"role": "user", "content": prompt}],
-                temperature=0.9,
-                max_tokens=500
-            )
-            
-            content = response.choices[0].message.content
+            content = None
+            last_error = None
+            for provider in providers:
+                try:
+                    content = self._chat(
+                        provider, "llama-3.3-70b-versatile",
+                        [{"role": "user", "content": prompt}],
+                        temperature=0.9,
+                        max_tokens=500,
+                    )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    print(f"[AI] Provider {provider} failed: {exc}")
+            if content is None:
+                raise last_error or RuntimeError("No AI provider returned metadata")
+
             print(f"[AI] Raw response: {content}")
             content = content.strip().replace("```json", "").replace("```", "").replace("`", "")
             metadata = json.loads(content)

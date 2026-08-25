@@ -13777,47 +13777,5 @@
       "type": "success",
       "timestamp": "2026-06-04 20:19:29"
     }
-  ],
-  "1763ffb6-13c0-40ba-976e-75abed45efa2": [
-    {
-      "message": "File: EURO TRUCK SIMULATOR за 20 минут [get.gt].mp4 (75.5 MB)",
-      "type": "info",
-      "timestamp": "2026-06-05 13:10:18"
-    },
-    {
-      "message": "Processing: K:\\DIY\\videobot\\uploads\\1763ffb6-13c0-40ba-976e-75abed45efa2_input.mp4",
-      "type": "progress",
-      "timestamp": "2026-06-05 13:10:18"
-    },
-    {
-      "message": "Duration: 1092.2s",
-      "type": "info",
-      "timestamp": "2026-06-05 13:10:18"
-    },
-    {
-      "message": "Found 1 segments",
-      "type": "success",
-      "timestamp": "2026-06-05 13:10:18"
-    },
-    {
-      "message": "[1/1] Processing 0.0s-45.0s",
-      "type": "progress",
-      "timestamp": "2026-06-05 13:10:18"
-    },
-    {
-      "message": "[1/1] Subtitles: 125 phrases",
-      "type": "info",
-      "timestamp": "2026-06-05 13:10:25"
-    },
-    {
-      "message": "[1/1] Video created",
-      "type": "success",
-      "timestamp": "2026-06-05 13:10:46"
-    },
-    {
-      "message": "Completed! Created 1 shorts",
-      "type": "success",
-      "timestamp": "2026-06-05 13:10:47"
-    }
   ]
 }

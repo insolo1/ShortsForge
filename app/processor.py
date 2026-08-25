@@ -330,6 +330,9 @@ class VideoProcessor:
                 if len(best_segments) >= shorts_count:
                     break
         
+        best_segments = self._fill_requested_segments(
+            best_segments, duration, short_length, shorts_count
+        )
         best_segments.sort(key=lambda x: x["start"])
         
         top = best_segments[0] if best_segments else None
@@ -352,7 +355,11 @@ class VideoProcessor:
                 current_phrase = {"start": word["start"], "end": word["end"], "words": 1}
                 current_texts = [word.get("text", "")]
             else:
-                if word["start"] - current_phrase["end"] < 1.0:
+                # Bound phrases so long continuous speech remains scoreable.
+                phrase_duration = word["end"] - current_phrase["start"]
+                if (word["start"] - current_phrase["end"] < 1.0
+                        and phrase_duration <= 12.0
+                        and current_phrase["words"] < 40):
                     current_phrase["end"] = word["end"]
                     current_phrase["words"] += 1
                     current_texts.append(word.get("text", ""))
@@ -371,6 +378,30 @@ class VideoProcessor:
             phrases.append(current_phrase)
         
         return phrases
+
+    def _fill_requested_segments(self, selected: List[Dict], duration: float,
+                                 short_length: int, shorts_count: int) -> List[Dict]:
+        """Fill sparse smart-selection results with deterministic time windows."""
+        target = min(max(0, int(shorts_count)), int(duration // short_length))
+        if target <= 0 or len(selected) >= target:
+            return selected[:target] if target else []
+
+        filled = list(selected)
+        for fallback in self._default_segments(duration, short_length, target):
+            if any(fallback["start"] < item["end"] and fallback["end"] > item["start"]
+                   for item in filled):
+                continue
+            filled.append({**fallback, "score": 0.0, "words": 0, "density": 0.0})
+            if len(filled) >= target:
+                break
+
+        if len(filled) < target:
+            print(f"[PROCESS] Smart selection produced {len(selected)}/{target}; using time-grid fallback")
+            filled = [
+                {**item, "score": 0.0, "words": 0, "density": 0.0}
+                for item in self._default_segments(duration, short_length, target)
+            ]
+        return filled
     
     def _find_best_segments(self, duration: float, short_length: int, shorts_count: int, subtitle_segments: List[Dict], video_path: str = "") -> List[Dict]:
         """Находит лучшие отрезки по плотности речи и длине непрерывной речи"""
@@ -494,6 +525,9 @@ class VideoProcessor:
                     break
         
         # Сортируем по времени
+        best_segments = self._fill_requested_segments(
+            best_segments, duration, short_length, shorts_count
+        )
         best_segments.sort(key=lambda x: x["start"])
         
         print(f"[PROCESS] Found {len(best_segments)} best segments. Top score: {best_segments[0]['score']:.1f}, words: {best_segments[0]['words']}, density: {best_segments[0]['density']:.1f}")
@@ -702,6 +736,10 @@ class VideoProcessor:
             if segdur - T < 1.0:
                 T = max(0.5, segdur - 1.0)
 
+            # Replace source time with the pause so output length stays unchanged.
+            D = min(D, max(0.5, segdur - T - 0.5))
+            source_end = segdur - D
+
             # кадр-заморозка в точке паузы (абсолютное время внутри исходного видео)
             freeze_path = self.output_dir / f"freeze_{job_id}_{index}.png"
             mid_abs = segment["start"] + T
@@ -737,14 +775,15 @@ class VideoProcessor:
             else:
                 chain_parts.append(f"[vbf][banner]overlay={bx}:{by}[vb]")
             chain_parts += [
-                f"[vc0]trim=start={T},setpts=PTS-STARTPTS[vc_t]",
+                f"[vc0]trim=start={T}:end={source_end},setpts=PTS-STARTPTS[vc_t]",
                 self._bg_filter_chain("[vc_t]", "vc", crop_fill, blurred_bg, suffix="_c"),
                 "[va][vb][vc]concat=n=3:v=1:a=0[vid]",
             ]
             has_audio = await self._has_audio(video_path)
-            # Звук баннера в паузе отключён: если баннер — кусок того же видео,
-            # его голос повторяется и звучит как эхо. В паузе — тишина.
-            banner_audio = False
+            # Во время паузы основной звук не смешивается со звуком баннера:
+            # concat последовательно ставит аудио баннера между частями исходника.
+            # Для изображения или видео без аудиодорожки используем тишину.
+            banner_audio = banner_is_video and await self._has_audio(banner_path)
             if has_audio:
                 # пауза: видео замирает, а на время баннера звучит аудио баннера (если это MP4)
                 chain_parts.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=0:{T},asetpts=N/SR/TB[aA]")
@@ -752,7 +791,7 @@ class VideoProcessor:
                     chain_parts.append(f"[2:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=duration={D},asetpts=N/SR/TB[aS]")
                 else:
                     chain_parts.append(f"[3:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=duration={D},asetpts=N/SR/TB[aS]")
-                chain_parts.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=start={T},asetpts=N/SR/TB[aC]")
+                chain_parts.append(f"[0:a:0]aformat=sample_rates=48000:channel_layouts=stereo,atrim=start={T}:end={source_end},asetpts=N/SR/TB[aC]")
                 chain_parts.append("[aA][aS][aC]concat=n=3:v=0:a=1[aud]")
             filter_chain = ";".join(chain_parts)
             map_video = "[vid]"
