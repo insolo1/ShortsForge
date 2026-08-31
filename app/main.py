@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import json
 import time
@@ -6,21 +6,27 @@ import uuid
 import hashlib
 import threading
 import asyncio
+import re
+import logging
 from pathlib import Path
 from typing import Optional, List
 from contextlib import asynccontextmanager
+
+# Force line-buffered output for real-time logs
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
+# Suppress uvicorn access log spam
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 os.environ["OMP_NUM_THREADS"] = "2"
 os.environ["MKL_NUM_THREADS"] = "2"
 os.environ["OPENBLAS_NUM_THREADS"] = "2"
 
-os.environ["PATH"] = ";".join([
-    r"C:\Users\DOM\AppData\Roaming\Python\Python311\site-packages\nvidia\cublas\bin",
-    r"C:\Users\DOM\AppData\Roaming\Python\Python311\site-packages\nvidia\cuda_nvrtc\bin",
-    r"C:\Users\DOM\AppData\Roaming\Python\Python311\site-packages\nvidia\cuda_runtime\bin",
-    r"C:\Users\DOM\AppData\Roaming\Python\Python311\site-packages\nvidia\cudnn\bin",
-    os.environ.get("PATH", ""),
-])
+# FFmpeg path from env (default: ffmpeg in PATH)
+# On Windows, set FFMPEG_PATH in .env if not in system PATH
+# On Linux/Docker, ffmpeg is typically at /usr/bin/ffmpeg
+# No hardcoded paths - use FFMPEG_PATH env var or system PATH
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -33,7 +39,7 @@ import aiofiles
 from processor import VideoProcessor, _read_env
 from ai_service import AIService
 from youtube_api import YouTubeAPI
-from api_keys import get_keys, add_key, remove_key, masked_keys, set_keys
+from api_keys import get_keys, add_key, remove_key, masked_keys, set_keys, mask_key
 
 BASE_DIR = Path(__file__).parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -43,6 +49,7 @@ SESSIONS_FILE = BASE_DIR / "sessions.json"
 JOBS_FILE = BASE_DIR / "jobs.json"
 JOB_LOGS_FILE = BASE_DIR / "job_logs.json"
 PRESETS_FILE = BASE_DIR / "presets.json"
+SETTINGS_FILE = BASE_DIR / "settings.json"
 FONTS_DIR = BASE_DIR / "fonts"
 BANNER_DIR = UPLOAD_DIR / "banners"
 
@@ -64,7 +71,7 @@ ROLES = {
     "user": ["create_shorts", "view_all"]
 }
 
-VERSION = "2.5.0"
+VERSION = "3.3.0"
 
 
 def _ok(data):
@@ -73,6 +80,24 @@ def _ok(data):
 
 def _err(msg, code=400):
     return JSONResponse({"status": "error", "message": msg}, status_code=code)
+
+
+def _load_settings_json() -> dict:
+    try:
+        if SETTINGS_FILE.exists():
+            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[SETTINGS] JSON read error: {e}")
+    return {}
+
+
+def _save_settings_json(updates: dict):
+    data = _load_settings_json()
+    data.update(updates)
+    try:
+        SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[SETTINGS] JSON save error: {e}")
 
 
 def _load_json(path):
@@ -169,8 +194,8 @@ def add_job_log(job_id: str, message: str, log_type: str = "info"):
         "message": message, "type": log_type,
         "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
     })
-    if len(job_logs[job_id]) > 10000:
-        job_logs[job_id] = job_logs[job_id][-10000:]
+    if len(job_logs[job_id]) > 2000:
+        job_logs[job_id] = job_logs[job_id][-2000:]
     now = time.time()
     if now - _last_log_save > 5.0:
         _last_log_save = now
@@ -233,6 +258,25 @@ except Exception as e:
 # в”Ђв”Ђ Lifespan в”Ђв”Ђ
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    stale_states = {"processing", "queued", "starting", "downloading", "uploading"}
+    stale_jobs = 0
+    for job_id, job in jobs.items():
+        if job.get("status") not in stale_states:
+            continue
+        job["status"] = "failed"
+        job["error"] = "Обработка была прервана перезапуском сервера. Уже созданные файлы сохранены."
+        job.pop("delete_after_finish", None)
+        job_logs.setdefault(job_id, []).append({
+            "message": job["error"],
+            "type": "warning",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        stale_jobs += 1
+    if stale_jobs:
+        save_jobs()
+        save_job_logs()
+        print(f"[BOOT] Marked {stale_jobs} interrupted jobs as failed; output files preserved")
+
     if _use_db:
         try:
             await init_db()
@@ -311,7 +355,7 @@ async def login(username: str = Form(...), password: str = Form(...)):
     users = load_users()
     user = users.get(username)
     if not user or user.get("password") != hsh(password):
-        raise HTTPException(status_code=401, detail="РќРµРІРµСЂРЅС‹Р№ Р»РѕРіРёРЅ РёР»Рё РїР°СЂРѕР»СЊ")
+        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
     is_admin = bool(user.get("admin"))
     token = str(uuid.uuid4())
     sessions[token] = {"username": username, "admin": is_admin}
@@ -355,7 +399,7 @@ async def create_user(request: Request, username: str = Form(...), password: str
     if not _is_admin(s):
         raise HTTPException(status_code=403, detail="Admin required")
     if len(password) < 4:
-        raise HTTPException(status_code=400, detail="РџР°СЂРѕР»СЊ СЃР»РёС€РєРѕРј РєРѕСЂРѕС‚РєРёР№ (РјРёРЅ. 4 СЃРёРјРІРѕР»Р°)")
+        raise HTTPException(status_code=400, detail="Пароль слишком короткий (мин. 4 символа)")
     users = load_users()
     users[username] = {"password": hsh(password), "admin": bool(admin)}
     save_users(users)
@@ -368,7 +412,7 @@ async def delete_user(username: str, request: Request):
     if not _is_admin(s):
         raise HTTPException(status_code=403, detail="Admin required")
     if username == s.get("username"):
-        raise HTTPException(status_code=400, detail="РќРµР»СЊР·СЏ СѓРґР°Р»РёС‚СЊ СЃР°РјРѕРіРѕ СЃРµР±СЏ")
+        raise HTTPException(status_code=400, detail="Нельзя удалить самого себя")
     users = load_users()
     users.pop(username, None)
     save_users(users)
@@ -380,9 +424,76 @@ async def get_roles():
     return {"roles": ROLES}
 
 
+def _font_user_dir(request: Request) -> tuple[dict, Path, str]:
+    session = verify(request)
+    username = str(session.get("username") or "user")
+    user_key = hashlib.sha256(username.encode("utf-8")).hexdigest()[:16]
+    user_dir = FONTS_DIR / "users" / user_key
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return session, user_dir, user_key
+
+
 @app.get("/api/fonts")
-async def get_fonts():
-    return {"fonts": ["TikTok Sans", "Montserrat Bold", "Montserrat", "Arial", "Verdana", "Impact", "Bebas Neue", "Russo One", "Obelix Pro", "Intro Rust"]}
+async def get_fonts(request: Request):
+    _, user_dir, user_key = _font_user_dir(request)
+    items = []
+    for path in sorted(FONTS_DIR.glob("*.ttf")):
+        items.append({
+            "value": path.stem, "label": path.stem,
+            "url": f"/fonts/{path.name}", "custom": False, "deletable": False,
+        })
+    for path in sorted(user_dir.glob("*.ttf")):
+        items.append({
+            "value": f"users/{user_key}/{path.stem}",
+            "label": f"{path.stem} (мой)",
+            "url": f"/fonts/users/{user_key}/{path.name}",
+            "custom": True, "deletable": True, "font_name": path.stem,
+        })
+    for font in ("Arial", "Verdana", "Impact"):
+        items.append({"value": font, "label": font, "custom": False, "deletable": False})
+    return {
+        "fonts": [item["value"] for item in items],
+        "font_items": items,
+        "custom_fonts": [item for item in items if item.get("custom")],
+    }
+
+
+@app.post("/api/fonts/upload")
+async def upload_font(request: Request, font_file: UploadFile = File(...)):
+    _, user_dir, user_key = _font_user_dir(request)
+    original_name = Path(font_file.filename or "").name
+    if Path(original_name).suffix.lower() != ".ttf":
+        raise HTTPException(status_code=400, detail="Можно загрузить только файл .ttf")
+    safe_stem = re.sub(r"[^0-9A-Za-zА-Яа-яЁё _.-]+", "", Path(original_name).stem).strip(" .")
+    if not safe_stem:
+        raise HTTPException(status_code=400, detail="Некорректное имя шрифта")
+    target = user_dir / f"{safe_stem}.ttf"
+    if target.exists():
+        raise HTTPException(status_code=409, detail=f"Шрифт «{safe_stem}» уже загружен")
+    content = await font_file.read(20 * 1024 * 1024 + 1)
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Размер шрифта не должен превышать 20 МБ")
+    if len(content) < 12 or content[:4] not in (b"\x00\x01\x00\x00", b"true", b"typ1", b"ttcf"):
+        raise HTTPException(status_code=400, detail="Файл не похож на корректный TTF-шрифт")
+    target.write_bytes(content)
+    font_value = f"users/{user_key}/{safe_stem}"
+    return {
+        "status": "success", "font_name": safe_stem, "font_value": font_value,
+        "message": f"Шрифт «{safe_stem}» загружен и выбран",
+    }
+
+
+@app.delete("/api/fonts")
+async def delete_font(request: Request, font_name: str):
+    _, user_dir, _ = _font_user_dir(request)
+    safe_name = Path(font_name).name
+    if safe_name != font_name or not safe_name:
+        raise HTTPException(status_code=400, detail="Некорректное имя шрифта")
+    target = user_dir / f"{safe_name}.ttf"
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Пользовательский шрифт не найден")
+    target.unlink()
+    return {"status": "success", "message": f"Шрифт «{safe_name}» удалён"}
 
 
 @app.get("/api/presets/list")
@@ -414,27 +525,36 @@ async def load_preset(name: str):
     return _ok({"preset": p})
 
 
+@app.delete("/api/presets/delete")
+async def delete_preset(name: str):
+    presets = load_presets()
+    new_presets = [p for p in presets if p.get("name") != name]
+    if len(new_presets) == len(presets):
+        return _err("Not found", 404)
+    save_presets_to_file(new_presets)
+    return _ok({"message": "Deleted"})
+
+
 @app.get("/api/settings")
 async def get_settings():
     return JSONResponse({
         "version": VERSION,
         "settings": {
             "crop_mode": _read_env("VIDEO_CROP_MODE", "9:16"),
-            "zoom_enabled": _read_env("VIDEO_ZOOM_ENABLE", "0") == "1",
             "font": _read_env("SUBTITLE_FONT", "Montserrat"),
             "style": _read_env("SUBTITLE_STYLE", "normal"),
             "fontsize": int(_read_env("SUBTITLE_FONTSIZE", "100")),
             "fontcolor": _read_env("SUBTITLE_FONTCOLOR", "white"),
             "position": int(_read_env("SUBTITLE_POSITION_Y", "1670")),
             "capitalize": _read_env("SUBTITLE_CAPITALIZE", "1") == "1",
-            "borderw": int(_read_env("SUBTITLE_BORDERW", "3")),
+            "borderw": int(_read_env("SUBTITLE_BORDERW", "0")),
             "bordercolor": _read_env("SUBTITLE_BORDERCOLOR", "black"),
             "boxborder": int(_read_env("SUBTITLE_BOX_BORDER", "0")),
             "boxcolor": _read_env("SUBTITLE_BOX_COLOR", "black@0.8"),
             "shadowx": int(_read_env("SUBTITLE_SHADOW_X", "2")),
             "shadowy": int(_read_env("SUBTITLE_SHADOW_Y", "2")),
             "shadowcolor": _read_env("SUBTITLE_SHADOW_COLOR", "black"),
-            "words_count": int(_read_env("SUBTITLE_WORDS_COUNT", "3")),
+            "words_count": int(_read_env("SUBTITLE_WORDS_COUNT", "1")),
             "word_fade": _read_env("SUBTITLE_WORD_FADE", "1") == "1",
             "whisper_model": _read_env("WHISPER_MODEL", "base"),
             "api_provider": "groq" if _read_env("GROQ_API_KEY") else ("openai" if _read_env("OPENAI_API_KEY") else "groq"),
@@ -452,11 +572,11 @@ async def update_settings(
     font: str = Form("Montserrat"), style: str = Form("normal"),
     fontsize: int = Form(100), fontcolor: str = Form("white"),
     position: int = Form(1670), capitalize: bool = Form(True),
-    crop_mode: str = Form("9:16"), zoom_enabled: bool = Form(False),
-    borderw: int = Form(3), bordercolor: str = Form("black"),
+    crop_mode: str = Form("9:16"),
+    borderw: int = Form(0), bordercolor: str = Form("black"),
     boxborder: int = Form(0), boxcolor: str = Form("black@0.8"),
     shadowx: int = Form(2), shadowy: int = Form(2), shadowcolor: str = Form("black"),
-    words_count: int = Form(3), word_fade: bool = Form(True),
+    words_count: int = Form(1), word_fade: bool = Form(True),
     whisper_model: str = Form("base"),
     api_provider: Optional[str] = Form(None), api_key: Optional[str] = Form(None),
     banner_x: str = Form("0"), banner_y: str = Form("0"),
@@ -474,7 +594,6 @@ async def update_settings(
         "GROQ_API_KEY": _keys["groq"] or _read_env('GROQ_API_KEY', ''),
         "OPENAI_API_KEY": _keys["openai"] or _read_env('OPENAI_API_KEY', ''),
         "VIDEO_CROP_MODE": crop_mode,
-        "VIDEO_ZOOM_ENABLE": '1' if zoom_enabled else '0',
         "SUBTITLE_FONT": font,
         "SUBTITLE_STYLE": style,
         "SUBTITLE_FONTSIZE": str(fontsize),
@@ -498,12 +617,17 @@ async def update_settings(
         "BANNER_OPACITY": str(banner_opacity),
     }
 
-    env_path = BASE_DIR / ".env"
-    for key, val in keys_to_set.items():
-        set_key(str(env_path), key, val)
-
-    # Reload env
-    load_dotenv(str(env_path), override=True)
+    # Сохраняем в settings.json (всегда — UI является источником правды),
+    # а .env пробуем дополнительно (на сервере он может быть смонтирован :ro)
+    _save_settings_json(keys_to_set)
+    try:
+        env_path = BASE_DIR / ".env"
+        for key, val in keys_to_set.items():
+            set_key(str(env_path), key, val)
+        # Reload env
+        load_dotenv(str(env_path), override=True)
+    except Exception as e:
+        print(f"[SETTINGS] .env write failed (ro mount?), using settings.json: {e}")
     return {"status": "success"}
 
 
@@ -632,9 +756,18 @@ async def cleanup():
 
 
 @app.get("/api/logs/{job_id}")
-async def get_logs(job_id: str):
+async def get_logs(job_id: str, after: int = 0, limit: int = 300):
     logs = job_logs.get(job_id, [])
-    return {"logs": logs, "status": jobs.get(job_id, {}).get("status", "unknown"), "progress": jobs.get(job_id, {}).get("progress", 0)}
+    start = max(0, min(int(after or 0), len(logs)))
+    batch_limit = max(1, min(int(limit or 300), 500))
+    batch = logs[start:start + batch_limit]
+    return {
+        "logs": batch,
+        "next": start + len(batch),
+        "total": len(logs),
+        "status": jobs.get(job_id, {}).get("status", "unknown"),
+        "progress": jobs.get(job_id, {}).get("progress", 0),
+    }
 
 
 @app.get("/api/jobs")
@@ -648,10 +781,20 @@ async def get_status(job_id: str):
     if not j:
         return _err("Not found", 404)
     shorts = j.get("shorts", [])
+    completed_count = len(shorts)
+    target_count = max(0, int(j.get("shorts_count", 0) or 0))
+    eta_seconds = None
+    started_at = j.get("started_at")
+    if j.get("status") == "processing" and started_at and completed_count > 0 and target_count > completed_count:
+        elapsed = max(0.0, time.time() - float(started_at))
+        eta_seconds = round((elapsed / completed_count) * (target_count - completed_count))
     return {
         "status": j.get("status", "unknown"),
         "progress": j.get("progress", 0),
         "error": j.get("error", ""),
+        "target_count": target_count,
+        "completed_count": completed_count,
+        "eta_seconds": eta_seconds,
         "shorts": [{
             "id": s.get("index", i),
             "title": s.get("title", f"#shorts #{s.get('index', i)+1}"),
@@ -683,6 +826,21 @@ async def get_job_api(job_id: str):
     }
 
 
+@app.delete("/api/jobs/{job_id}")
+async def delete_job_api(job_id: str):
+    if job_id not in jobs:
+        return _err("Not found", 404)
+    job = jobs[job_id]
+    if job.get("status") in ("processing", "queued", "starting", "downloading", "uploading"):
+        job["delete_after_finish"] = True
+        save_jobs()
+        return _ok({"message": "Project will be deleted after processing", "scheduled": True})
+    deleted = _delete_job_artifacts(job_id)
+    save_jobs()
+    save_job_logs()
+    return _ok({"message": "Project deleted", "deleted": deleted})
+
+
 @app.get("/api/download/{short_idx}")
 async def download_short(short_idx: int, job_id: str = None):
     # Try to find the short in any job
@@ -702,50 +860,251 @@ async def download_short(short_idx: int, job_id: str = None):
     return _err("Not found", 404)
 
 
-@app.get("/api/download-zip/{job_id}")
-async def download_job_zip(job_id: str):
-    import tempfile, zipfile, functools
-    j = jobs.get(job_id)
-    if not j:
-        return _err("Job not found", 404)
-    shorts = j.get("shorts", [])
-    if not shorts:
-        return _err("No shorts", 404)
+def _shorts_with_inferred_sources(job_id: str, shorts: list) -> list:
+    """Recover source grouping for folder jobs created before source_name was persisted."""
+    if not shorts or all(item.get("source_name") for item in shorts):
+        return shorts
 
-    # РџСЂРѕРІРµСЂСЏРµРј С‡С‚Рѕ С„Р°Р№Р»С‹ СЃСѓС‰РµСЃС‚РІСѓСЋС‚
-    valid = [s for s in shorts if Path(s.get("filepath", "")).exists()]
-    if not valid:
-        return _err("No files found on disk", 404)
+    source_by_index = {}
+    current_source = ""
+    video_pattern = re.compile(r"^\[Video \d+/\d+\]\s+(.+?)\s+(?:—|вЂ”)\s+\d+\s+shorts$")
+    short_pattern = re.compile(r"^\[(\d+)/\d+\]\s+Processing\b")
+    for entry in job_logs.get(job_id, []):
+        message = str(entry.get("message", "")) if isinstance(entry, dict) else str(entry)
+        video_match = video_pattern.match(message)
+        if video_match:
+            current_source = video_match.group(1).strip()
+            continue
+        short_match = short_pattern.match(message)
+        if short_match and current_source:
+            source_by_index[int(short_match.group(1)) - 1] = current_source
 
-    total_gb = sum(Path(s["filepath"]).stat().st_size for s in valid) / (1024**3)
-    print(f"[ZIP] Packing {len(valid)} files ({total_gb:.1f}GB) for job {job_id}...")
+    enriched = []
+    for fallback_index, item in enumerate(shorts):
+        copy = dict(item)
+        short_index = int(copy.get("index", fallback_index))
+        if not copy.get("source_name") and short_index in source_by_index:
+            copy["source_name"] = source_by_index[short_index]
+        enriched.append(copy)
+    return enriched
 
-    # Р“РµРЅРµСЂРёСЂСѓРµРј ZIP РІ temp С„Р°Р№Р»Рµ (РІ РѕС‚РґРµР»СЊРЅРѕРј РїРѕС‚РѕРєРµ, С‡С‚РѕР± РЅРµ Р±Р»РѕРєРёСЂРѕРІР°С‚СЊ event loop)
-    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, functools.partial(_build_zip, tmp.name, valid))
-    print(f"[ZIP] Done, streaming {tmp.name}...")
+MAX_ZIP_SIZE = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GiB
+ZIP_SIZE_RESERVE = 2 * 1024 * 1024  # ZIP headers, filenames and descriptions.txt
+
+
+def _safe_zip_folder(source_name: str) -> str:
+    name = Path(source_name).stem if source_name else "video"
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .") or "video"
+
+
+def _plan_zip_parts(shorts: list, max_size: int = MAX_ZIP_SIZE):
+    """Group shorts into downloadable ZIP parts while preserving source folders."""
+    if max_size <= 0:
+        raise ValueError("max_size must be positive")
+
+    # Leave room for ZIP metadata so the finished archive stays below max_size.
+    reserve = min(ZIP_SIZE_RESERVE, max_size // 100)
+    payload_limit = max(1, max_size - reserve)
+    by_source = {}
+    for item in shorts:
+        file_path = Path(item.get("filepath", ""))
+        if file_path.is_file():
+            source = str(item.get("source_name") or "video")
+            by_source.setdefault(source, []).append((item, file_path.stat().st_size))
+
+    # Different source paths can have the same filename, so folder names must be unique.
+    used_folders = set()
+    source_chunks = []
+    for source, entries in by_source.items():
+        base_folder = _safe_zip_folder(source)
+        candidate = base_folder
+        suffix = 2
+        while candidate.casefold() in used_folders:
+            candidate = f"{base_folder} {suffix}"
+            suffix += 1
+        base_folder = candidate
+        used_folders.add(base_folder.casefold())
+
+        chunks = []
+        chunk_items, chunk_size = [], 0
+        for item, file_size in entries:
+            if chunk_items and chunk_size + file_size > payload_limit:
+                chunks.append((chunk_items, chunk_size))
+                chunk_items, chunk_size = [], 0
+            chunk_items.append(item)
+            chunk_size += file_size
+        if chunk_items:
+            chunks.append((chunk_items, chunk_size))
+
+        split_source = len(chunks) > 1
+        for chunk_index, (chunk_items, chunk_size) in enumerate(chunks, 1):
+            folder = f"{base_folder} {chunk_index}" if split_source else base_folder
+            prepared_items = []
+            for item in chunk_items:
+                prepared = dict(item)
+                prepared["_zip_folder"] = folder
+                prepared_items.append(prepared)
+            source_chunks.append({
+                "items": prepared_items,
+                "size": chunk_size,
+                "folders": [folder],
+                "oversized": chunk_size > payload_limit,
+            })
+
+    parts = []
+    current = {"items": [], "size": 0, "folders": [], "oversized": False}
+    for chunk in source_chunks:
+        if current["items"] and (chunk["oversized"] or current["size"] + chunk["size"] > payload_limit):
+            parts.append(current)
+            current = {"items": [], "size": 0, "folders": [], "oversized": False}
+        current["items"].extend(chunk["items"])
+        current["size"] += chunk["size"]
+        current["folders"].extend(chunk["folders"])
+        current["oversized"] = current["oversized"] or chunk["oversized"]
+        if chunk["oversized"]:
+            parts.append(current)
+            current = {"items": [], "size": 0, "folders": [], "oversized": False}
+    if current["items"]:
+        parts.append(current)
+
+    for part_number, part in enumerate(parts, 1):
+        part["part_num"] = part_number
+    return parts
+
+
+def _zip_parts_for_job(job_id: str):
+    job = jobs.get(job_id)
+    if not job:
+        return None, _err("Job not found", 404)
+    shorts = _shorts_with_inferred_sources(job_id, job.get("shorts", []))
+    default_source = job.get("filename") or "video"
+    shorts = [
+        item if item.get("source_name") else {**item, "source_name": default_source}
+        for item in shorts
+    ]
+    parts = _plan_zip_parts(shorts)
+    if not parts:
+        return None, _err("No finished video files found", 404)
+    return parts, None
+
+
+def _zip_part_filename(job_id: str, part_number: int, total_parts: int) -> str:
+    if total_parts == 1:
+        return f"shorts_{job_id}.zip"
+    return f"shorts_{job_id}_part_{part_number}_of_{total_parts}.zip"
+
+
+@app.get("/api/download-zip/{job_id}/manifest")
+async def download_job_zip_manifest(job_id: str):
+    parts, error = _zip_parts_for_job(job_id)
+    if error:
+        return error
+    total = len(parts)
+    return _ok({
+        "max_part_size": MAX_ZIP_SIZE,
+        "parts": [{
+            "number": part["part_num"],
+            "filename": _zip_part_filename(job_id, part["part_num"], total),
+            "media_size": part["size"],
+            "folders": part["folders"],
+            "oversized": part["oversized"],
+            "url": f"/api/download-zip/{job_id}/part/{part['part_num']}",
+        } for part in parts],
+    })
+
+
+@app.get("/api/download-zip/{job_id}/part/{part_number}")
+async def download_job_zip_part(job_id: str, part_number: int):
+    import functools
+    import tempfile
+
+    parts, error = _zip_parts_for_job(job_id)
+    if error:
+        return error
+    if part_number < 1 or part_number > len(parts):
+        return _err("ZIP part not found", 404)
+
+    part = parts[part_number - 1]
+    fd, tmp_path = tempfile.mkstemp(prefix=f"shorts_{job_id}_{part_number}_", suffix=".zip")
+    os.close(fd)
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, functools.partial(_build_zip, tmp_path, part["items"]))
+        zip_size = os.path.getsize(tmp_path)
+        if zip_size > MAX_ZIP_SIZE and not part["oversized"]:
+            Path(tmp_path).unlink(missing_ok=True)
+            return _err("ZIP part exceeded the 1.5 GB limit", 500)
+    except Exception:
+        Path(tmp_path).unlink(missing_ok=True)
+        raise
 
     async def stream_file():
-        with open(tmp.name, "rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk: break
-                yield chunk
-        os.unlink(tmp.name)
+        try:
+            with open(tmp_path, "rb") as file_obj:
+                while chunk := file_obj.read(1024 * 1024):
+                    yield chunk
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
 
-    return StreamingResponse(stream_file(), media_type="application/zip",
-                              headers={"Content-Disposition": f'attachment; filename="shorts_{job_id}.zip"'})
+    filename = _zip_part_filename(job_id, part_number, len(parts))
+    return StreamingResponse(
+        stream_file(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(zip_size),
+        },
+    )
 
-def _build_zip(path: str, shorts: list):
-    """РЎРёРЅС…СЂРѕРЅРЅР°СЏ СЃР±РѕСЂРєР° ZIP (Р·Р°РїСѓСЃРєР°РµС‚СЃСЏ РІ thread pool)"""
+
+@app.get("/api/download-zip/{job_id}")
+async def download_job_zip(job_id: str):
+    """Backward-compatible download for jobs that fit into one ZIP part."""
+    parts, error = _zip_parts_for_job(job_id)
+    if error:
+        return error
+    if len(parts) > 1:
+        return _err("Archive is split into parts; request the ZIP manifest first", 409)
+    return await download_job_zip_part(job_id, 1)
+
+
+def _build_zip(path: str, shorts: list, folder_prefix: str = ""):
     import zipfile
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-        for s in shorts:
-            fp = Path(s["filepath"])
-            if fp.exists():
-                zf.write(str(fp), arcname=s.get("filename", fp.name))
 
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED, allowZip64=True) as archive:
+        descriptions = []
+        used_names = set()
+        for index, item in enumerate(shorts):
+            file_path = Path(item["filepath"])
+            if not file_path.is_file():
+                continue
+
+            # Папка уже определена в плане
+            folder = item.get("_zip_folder", "")
+            name = item.get("filename") or file_path.name
+            archive_name = f"{folder}/{name}" if folder else name
+            if archive_name in used_names:
+                name = f"{index + 1}_{name}"
+                archive_name = f"{folder}/{name}" if folder else name
+            used_names.add(archive_name)
+            archive.write(str(file_path), arcname=archive_name)
+
+            tags = item.get("tags", [])
+            tags_text = tags if isinstance(tags, str) else ", ".join(str(tag) for tag in tags)
+            source_name = item.get("source_name") or ""
+            source_file_name = Path(source_name).name if source_name else ""
+            descriptions.append(
+                f"--- #{index + 1} ---\n"
+                f"Имя исходного файла: {source_file_name}\n"
+                f"Путь исходного видео: {source_name}\n"
+                f"Файл: {archive_name}\n"
+                f"Заголовок: {item.get('title', '')}\n"
+                f"Описание: {item.get('description', '')}\n"
+                f"Теги: {tags_text}\n"
+            )
+
+        if descriptions:
+            archive.writestr("descriptions.txt", "\ufeff" + "\n".join(descriptions))
 
 async def _save_banner_upload(banner_file, job_id: str) -> str:
     """РЎРѕС…СЂР°РЅСЏРµС‚ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ Р±Р°РЅРЅРµСЂ (РёР·РѕР±СЂР°Р¶РµРЅРёРµ РёР»Рё РІРёРґРµРѕ) РІ BANNER_DIR."""
@@ -757,6 +1116,21 @@ async def _save_banner_upload(banner_file, job_id: str) -> str:
     with open(path, "wb") as f:
         while True:
             chunk = await banner_file.read(1024 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+    return str(path)
+
+
+async def _save_music_upload(audio_file, job_id: str) -> str:
+    """РЎРѕС…СЂР°РЅСЏРµС‚ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ Р°СѓРґРёРѕ-С„Р°Р№Р» (РјСѓР·С‹РєР°) РІ UPLOAD_DIR."""
+    if not audio_file or not audio_file.filename:
+        return None
+    ext = Path(audio_file.filename).suffix or ".mp3"
+    path = UPLOAD_DIR / f"{job_id}_audio{ext}"
+    with open(path, "wb") as f:
+        while True:
+            chunk = await audio_file.read(1024 * 1024)
             if not chunk:
                 break
             f.write(chunk)
@@ -964,52 +1338,72 @@ async def cancel_current_job():
     return {"status": "success", "cancelled_queued": len(queued)}
 
 
+def _delete_job_artifacts(jid: str) -> int:
+    """Delete one project's generated files, uploads and database records."""
+    job = jobs.get(jid)
+    if not job:
+        return 0
+    deleted = 0
+    for short in job.get("shorts", []):
+        fp = Path(short.get("filepath", ""))
+        if fp.is_file():
+            try:
+                fp.unlink(); deleted += 1
+            except:
+                pass
+    patterns = (
+        (UPLOAD_DIR, f"{jid}_input*"),
+        (UPLOAD_DIR, f"{jid}_audio*"),
+        (OUTPUT_DIR, f"subs_{jid}*"),
+        (OUTPUT_DIR, f"short_{jid}_*"),
+        (OUTPUT_DIR, f"freeze_{jid}*"),
+        (OUTPUT_DIR, f"mus_{jid}*"),
+        (BANNER_DIR, f"banner_{jid}*"),
+    )
+    for directory, pattern in patterns:
+        for path in directory.glob(pattern):
+            try:
+                if path.is_file():
+                    path.unlink(); deleted += 1
+            except:
+                pass
+    jobs.pop(jid, None)
+    job_logs.pop(jid, None)
+    return deleted
+
+
 @app.post("/api/cleanup-after-close")
 async def cleanup_after_close(data: dict):
-    """РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРѕРµ СѓРґР°Р»РµРЅРёРµ С„Р°Р№Р»РѕРІ Р·Р°РґР°С‡Рё РїСЂРё Р·Р°РєСЂС‹С‚РёРё СЃС‚СЂР°РЅРёС†С‹."""
+    """Delete completed session projects; page reloads must not affect active jobs."""
     ids = data.get("job_ids", [])
     if isinstance(ids, str):
         ids = [ids]
     deleted = 0
+    preserved = 0
     for jid in ids:
-        j = jobs.get(jid)
-        if not j:
+        job = jobs.get(jid)
+        if not job:
             continue
-        if j.get("status") in ("processing", "queued", "starting", "downloading"):
-            continue  # Р°РєС‚РёРІРЅС‹Рµ Р·Р°РґР°С‡Рё РЅРµ С‚СЂРѕРіР°РµРј
-        for s in j.get("shorts", []):
-            fp = Path(s.get("filepath", ""))
-            if fp.exists():
-                try:
-                    fp.unlink(); deleted += 1
-                except:
-                    pass
-        for inp in list(UPLOAD_DIR.glob(f"{jid}_input*")):
-            try:
-                inp.unlink(); deleted += 1
-            except:
-                pass
-        # С„Р°Р№Р»С‹ Р±Р°РЅРЅРµСЂР° СЌС‚РѕР№ Р·Р°РґР°С‡Рё С‚РѕР¶Рµ СѓРґР°Р»СЏРµРј (РїРѕСЃР»Рµ СЂРµРЅРґРµСЂР° РѕРЅРё РЅРµ РЅСѓР¶РЅС‹)
-        for b in list(BANNER_DIR.glob(f"banner_{jid}*")):
-            try:
-                b.unlink(); deleted += 1
-            except:
-                pass
-        jobs.pop(jid, None)
-        job_logs.pop(jid, None)
+        if job.get("status") in ("processing", "queued", "starting", "downloading", "uploading"):
+            job.pop("delete_after_finish", None)
+            preserved += 1
+            continue
+        deleted += _delete_job_artifacts(jid)
     save_jobs()
     save_job_logs()
-    return {"status": "success", "deleted": deleted}
+    return {"status": "success", "deleted": deleted, "preserved": preserved}
 
 
 # в”Ђв”Ђ Processing endpoints (threaded) в”Ђв”Ђ
 
 def _process_one_segment(job_id, video_path, seg_index, seg, total,
                          use_smart, full_subtitles, whisper_model,
-                         blurred_bg, filename_keywords, crop_fill,
+                         crop_mode, blurred_bg, filename_keywords,
                          banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity,
                          banner_style, banner_position, banner_duration, banner_full_duration,
-                         save_video, save_folder):
+                         save_video, save_folder,
+                         music_path=None, music_volume=0.7, music_start=0.0, music_end=0.0,
+                         replace_audio=False, subtitle_font_name=None):
     """РћР±СЂР°Р±Р°С‚С‹РІР°РµС‚ РѕРґРёРЅ СЃРµРіРјРµРЅС‚ РІ РѕС‚РґРµР»СЊРЅРѕРј РїРѕС‚РѕРєРµ. Р’РѕР·РІСЂР°С‰Р°РµС‚ (index, short_path) РёР»Рё None."""
     import asyncio
     loop = asyncio.new_event_loop()
@@ -1049,11 +1443,13 @@ def _process_one_segment(job_id, video_path, seg_index, seg, total,
             processor.create_short(
                 video_path, seg, seg_index, job_id,
                 subtitle_segments,
-                blurred_bg, filename_keywords, crop_fill,
+                crop_mode, blurred_bg, filename_keywords,
                 banner_enabled, banner_path, banner_x, banner_y,
                 banner_w, banner_h, banner_opacity,
                 banner_style, banner_position, banner_duration,
-                banner_full_duration
+                banner_full_duration,
+                music_path, music_volume, music_start, music_end, replace_audio,
+                subtitle_font_name
             )
         )
         if not short_path or not Path(short_path).exists():
@@ -1075,7 +1471,7 @@ def _process_one_segment(job_id, video_path, seg_index, seg, total,
 
 
 def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_count: int,
-                        blurred_bg: bool, crop_fill: bool, smart_selection: str,
+                        crop_mode: str, blurred_bg: bool, smart_selection: str,
                         save_video: bool, save_folder: str,
                         banner_enabled: bool, banner_x: int, banner_y: int,
                         banner_w: int, banner_h: int, banner_opacity: int,
@@ -1083,23 +1479,32 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                         banner_path: str = None, banner_style: str = "overlay",
                         banner_position: int = 50, banner_duration: int = 3,
                         banner_full_duration: bool = False,
-
                         min_short_length: int = 30, max_short_length: int = 60,
-                        auto_duration: bool = False):
+                        auto_duration: bool = False,
+                        music_path: str = None, music_volume: float = 0.7,
+                        music_start: float = 0.0, music_end: float = 0.0,
+                        replace_audio: bool = False, scene_start: bool = False,
+                        subtitle_font_name: str = None):
     """Run processing in a thread, updating jobs + job_logs"""
     import asyncio
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
         jobs[job_id]["status"] = "processing"
-        add_job_log(job_id, f"Processing: {video_path}", "progress")
+        jobs[job_id]["started_at"] = time.time()
+        add_job_log(job_id, f"Processing started", "progress")
 
         video_info = loop.run_until_complete(processor.get_video_info(video_path))
         dur = video_info.get("duration", 0)
         add_job_log(job_id, f"Duration: {dur:.1f}s", "info")
+        add_job_log(job_id, f"Format: {crop_mode}", "info")
 
-        # Р”Р»СЏ РІС‹Р±РѕСЂР° Р»СѓС‡С€РёС… РјРѕРјРµРЅС‚РѕРІ СЃРєР°РЅРёСЂСѓРµРј РІРёРґРµРѕ С†РµР»РёРєРѕРј Р±С‹СЃС‚СЂРѕР№ base-РјРѕРґРµР»СЊСЋ
-        use_smart = (smart_selection or "off") != "off" or auto_duration
+        # Р”Р»СЏ РІС‹Р±РѕСЂР° Р»СѓС‡С€РёС… РјРѕРјРµРЅС‚РѕРІ СЃРєР°РЅРёСЂРµРј РІРёРґРµРѕ С†РµР»РёРєРѕРј Р±С‹СЃС‚СЂРѕР№ base-РјРѕРґРµР»СЊСЋ
+        if scene_start and (smart_selection or "off") == "off":
+            smart_selection = "global"
+        use_smart = (smart_selection or "off") != "off"
+        if scene_start:
+            add_job_log(job_id, "Scene start: candidates will begin at detected visual cuts", "info")
         whisper_model = _read_env("WHISPER_MODEL", "base")
         full_subtitles = None
         if use_smart:
@@ -1120,16 +1525,19 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
                 subtitle_segments=full_subtitles,
                 smart_selection=smart_selection,
                 auto_duration=auto_duration,
-                min_length=min_short_length, max_length=max_short_length
+                min_length=min_short_length, max_length=max_short_length,
+                scene_start=scene_start
             )
         )
         add_job_log(job_id, f"Found {len(segments)} segments", "success")
 
         _seg_args = (use_smart, full_subtitles, whisper_model,
-                     blurred_bg, filename_keywords, crop_fill,
+                     crop_mode, blurred_bg, filename_keywords,
                      banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity,
                      banner_style, banner_position, banner_duration, banner_full_duration,
-                     save_video, save_folder)
+                     save_video, save_folder,
+                     music_path, music_volume, music_start, music_end, replace_audio,
+                     subtitle_font_name)
 
         results = []
         workers = max(1, int(_read_env("SEGMENT_WORKERS", "2")))
@@ -1161,6 +1569,14 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
             metadata = loop.run_until_complete(
                 ai_service.generate_metadata(transcript_text, i + 1, video_info)
             )
+            if metadata.get("_ai_error"):
+                add_job_log(
+                    job_id,
+                    f"[{i+1}/{len(results)}] AI fallback: {metadata['_ai_error']}",
+                    "warning"
+                )
+            for warning in metadata.get("_ai_warnings", []):
+                add_job_log(job_id, f"[{i+1}/{len(results)}] AI warning: {warning}", "warning")
             title = metadata["title"]
             description = metadata["description"]
             tags = metadata["tags"]
@@ -1192,10 +1608,43 @@ def _process_job_thread(job_id: str, video_path: str, short_length: int, shorts_
         traceback.print_exc()
     finally:
         loop.close()
+        if jobs.get(job_id, {}).get("delete_after_finish"):
+            _delete_job_artifacts(job_id)
+            save_jobs()
+            save_job_logs()
+
+
+def _allocate_folder_shorts(durations: list[float], total: int, adaptive: bool = True) -> list[int]:
+    """Distribute a folder-wide quota by source duration, keeping short files represented."""
+    count = len(durations)
+    quotas = [0] * count
+    if count == 0 or total <= 0:
+        return quotas
+
+    normalized = [max(0.0, float(duration or 0.0)) for duration in durations]
+    if total < count:
+        order = sorted(range(count), key=lambda i: normalized[i], reverse=True) if adaptive else list(range(count))
+        for index in order[:total]:
+            quotas[index] = 1
+        return quotas
+
+    quotas = [1] * count
+    extra = total - count
+    weight_sum = sum(normalized)
+    weights = normalized if adaptive and weight_sum > 0 else [1.0] * count
+    weight_sum = sum(weights)
+    exact = [extra * weight / weight_sum for weight in weights]
+    floors = [int(value) for value in exact]
+    quotas = [base + addition for base, addition in zip(quotas, floors)]
+    left = extra - sum(floors)
+    order = sorted(range(count), key=lambda i: (exact[i] - floors[i], weights[i]), reverse=True)
+    for index in order[:left]:
+        quotas[index] += 1
+    return quotas
 
 
 def _process_folder_thread(job_id: str, video_paths: list, short_length: int, shorts_count: int,
-                           blurred_bg: bool, crop_fill: bool, smart_selection: str,
+                           crop_mode: str, blurred_bg: bool, smart_selection: str,
                            save_video: bool, save_folder: str,
                            banner_enabled: bool, banner_x: int, banner_y: int,
                            banner_w: int, banner_h: int, banner_opacity: int,
@@ -1203,18 +1652,33 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                            banner_path: str = None, banner_style: str = "overlay",
                            banner_position: int = 50, banner_duration: int = 3,
                            banner_full_duration: bool = False,
-   
                            min_short_length: int = 30, max_short_length: int = 60,
-                           auto_duration: bool = False):
+                           auto_duration: bool = False,
+                           music_path: str = None, music_volume: float = 0.7,
+                           music_start: float = 0.0, music_end: float = 0.0,
+                           replace_audio: bool = False, scene_start: bool = False,
+                           subtitle_font_name: str = None,
+                           adaptive_folder_allocation: bool = True):
     """Process multiple videos, distributing shorts_count across them"""
     import asyncio
-    import math
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     jobs[job_id]["status"] = "processing"
+    jobs[job_id]["started_at"] = time.time()
     total_made = 0
-    shorts_per_video_max = max(1, math.ceil(shorts_count / len(video_paths))) if shorts_count > 1 else shorts_count
     try:
+        video_infos = []
+        durations = []
+        for _, vpath in video_paths:
+            info = loop.run_until_complete(processor.get_video_info(vpath))
+            video_infos.append(info)
+            durations.append(max(0.0, float(info.get("duration", 0) or 0)))
+
+        initial_quotas = _allocate_folder_shorts(durations, shorts_count, adaptive_folder_allocation)
+        allocation = ", ".join(str(quota) for quota in initial_quotas)
+        allocation_mode = "by duration" if adaptive_folder_allocation else "equally"
+        add_job_log(job_id, f"Folder quota {allocation_mode}: {allocation} (total {sum(initial_quotas)})", "info")
+
         for vidx, (fname, vpath) in enumerate(video_paths):
             if _cancel_flag:
                 add_job_log(job_id, "Cancelled by user", "warning")
@@ -1224,14 +1688,22 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                 break
 
             remaining = shorts_count - total_made
-            per_video = min(shorts_per_video_max, remaining)
+            remaining_quotas = _allocate_folder_shorts(durations[vidx:], remaining, adaptive_folder_allocation)
+            per_video = remaining_quotas[0] if remaining_quotas else 0
+            if per_video <= 0:
+                continue
             add_job_log(job_id, f"[Video {vidx+1}/{len(video_paths)}] {fname} вЂ” {per_video} shorts", "info")
 
-            video_info = loop.run_until_complete(processor.get_video_info(vpath))
-            dur = video_info.get("duration", 0)
+            video_info = video_infos[vidx]
+            dur = durations[vidx]
             add_job_log(job_id, f"[Video {vidx+1}] Duration: {dur:.1f}s", "info")
+            add_job_log(job_id, f"[Video {vidx+1}] Format: {crop_mode}", "info")
 
-            use_smart = (smart_selection or "off") != "off" or auto_duration
+            if scene_start and (smart_selection or "off") == "off":
+                smart_selection = "global"
+            use_smart = (smart_selection or "off") != "off"
+            if scene_start:
+                add_job_log(job_id, f"[Video {vidx+1}] Scene start enabled", "info")
             whisper_model = _read_env("WHISPER_MODEL", "base")
             full_subtitles = None
             if use_smart:
@@ -1252,7 +1724,8 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                     subtitle_segments=full_subtitles,
                     smart_selection=smart_selection,
                     auto_duration=auto_duration,
-                    min_length=min_short_length, max_length=max_short_length
+                    min_length=min_short_length, max_length=max_short_length,
+                    scene_start=scene_start
                 )
             )
             add_job_log(job_id, f"[Video {vidx+1}] Found {len(segments)} segments", "info")
@@ -1287,11 +1760,13 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                     processor.create_short(
                         vpath, seg, idx, job_id,
                         subtitle_segments,
-                        blurred_bg, filename_keywords, crop_fill,
+                        crop_mode, blurred_bg, filename_keywords,
                         banner_enabled, banner_path, banner_x, banner_y,
                         banner_w, banner_h, banner_opacity,
                         banner_style, banner_position, banner_duration,
-                        banner_full_duration
+                        banner_full_duration,
+                        music_path, music_volume, music_start, music_end, replace_audio,
+                        subtitle_font_name
                     )
                 )
 
@@ -1310,6 +1785,14 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                 metadata = loop.run_until_complete(
                     ai_service.generate_metadata(transcript_text, idx + 1, video_info)
                 )
+                if metadata.get("_ai_error"):
+                    add_job_log(
+                        job_id,
+                        f"[{idx+1}/{shorts_count}] AI fallback: {metadata['_ai_error']}",
+                        "warning"
+                    )
+                for warning in metadata.get("_ai_warnings", []):
+                    add_job_log(job_id, f"[{idx+1}/{shorts_count}] AI warning: {warning}", "warning")
                 title = metadata["title"]
                 description = metadata["description"]
                 tags = metadata["tags"]
@@ -1317,7 +1800,8 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                 jobs[job_id].setdefault("shorts", []).append({
                     "index": idx, "filename": Path(short_path).name,
                     "filepath": short_path, "title": title,
-                    "description": description, "tags": tags
+                    "description": description, "tags": tags,
+                    "source_name": fname
                 })
                 jobs[job_id]["progress"] = min(95, 20 + (idx + 1) * 70 // shorts_count)
                 save_jobs()
@@ -1327,7 +1811,7 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
                     saved.mkdir(parents=True, exist_ok=True)
                     import shutil
                     shutil.copy2(short_path, saved / f"short_{job_id}_{idx}.mp4")
-                    add_job_log(job_id, f"[{idx+1}/{shorts_count}] Saved to {save_folder}", "success")
+                    add_job_log(job_id, f"[{idx+1}/{shorts_count}] Saved", "success")
 
             if total_made >= shorts_count:
                 break
@@ -1347,6 +1831,10 @@ def _process_folder_thread(job_id: str, video_paths: list, short_length: int, sh
         traceback.print_exc()
     finally:
         loop.close()
+        if jobs.get(job_id, {}).get("delete_after_finish"):
+            _delete_job_artifacts(job_id)
+            save_jobs()
+            save_job_logs()
 
 
 @app.post("/api/upload-file")
@@ -1355,8 +1843,10 @@ async def upload_file(
     short_length: int = Form(45),
     shorts_count: int = Form(5),
     smart_selection: str = Form("off"),
+    scene_start: bool = Form(False),
+    subtitle_font: str = Form(""),
     blurred_bg: bool = Form(False),
-    crop_fill: bool = Form(False),
+    crop_mode: str = Form("square"),
     save_video: bool = Form(False),
     save_folder: str = Form("saved"),
     banner_enabled: bool = Form(False),
@@ -1368,12 +1858,18 @@ async def upload_file(
     banner_full_duration: bool = Form(False),
     min_short_length: int = Form(30), max_short_length: int = Form(60),
     auto_duration: bool = Form(False),
-    filename_keywords: str = Form("")
+    filename_keywords: str = Form(""),
+    audio_file: UploadFile = File(None),
+    enable_audio: bool = Form(False),
+    music_volume: float = Form(0.7),
+    audio_start: float = Form(0.0), audio_end: float = Form(0.0),
+    replace_audio: bool = Form(False)
 ):
     job_id = str(uuid.uuid4())
     safe = f"{job_id}_input.mp4"
     video_path = str(UPLOAD_DIR / safe)
     banner_path = await _save_banner_upload(banner_file, job_id)
+    music_path = await _save_music_upload(audio_file, job_id) if enable_audio else None
 
     file_size = 0
     with open(video_path, "wb") as f:
@@ -1392,17 +1888,21 @@ async def upload_file(
                      "created_at": now_str, "shorts": []}
     save_jobs()
     add_job_log(job_id, f"File: {file.filename} ({file_size_mb:.1f} MB)", "info")
+    if music_path:
+        add_job_log(job_id, "Music track added (volume {:.0f}%)".format(music_volume * 100), "info")
 
     started = _enqueue_job(_process_job_thread, (
         job_id, video_path, short_length, shorts_count,
-        blurred_bg, crop_fill, smart_selection,
+        crop_mode, blurred_bg, smart_selection,
         save_video, save_folder,
         banner_enabled, banner_x, banner_y,
         banner_w, banner_h, banner_opacity,
         filename_keywords,
         banner_path, banner_style, banner_position, banner_duration,
         banner_full_duration,
-        min_short_length, max_short_length, auto_duration
+        min_short_length, max_short_length, auto_duration,
+        music_path, music_volume, audio_start, audio_end, replace_audio,
+        scene_start, subtitle_font or None
     ))
 
     return {"job_id": job_id, "status": "started" if started else "queued"}
@@ -1414,8 +1914,10 @@ async def upload_folder(
     short_length: int = Form(45),
     shorts_count: int = Form(5),
     smart_selection: str = Form("off"),
+    scene_start: bool = Form(False),
+    subtitle_font: str = Form(""),
     blurred_bg: bool = Form(False),
-    crop_fill: bool = Form(False),
+    crop_mode: str = Form("square"),
     save_video: bool = Form(False),
     save_folder: str = Form("saved"),
     banner_enabled: bool = Form(False),
@@ -1427,16 +1929,25 @@ async def upload_folder(
     banner_full_duration: bool = Form(False),
     min_short_length: int = Form(30), max_short_length: int = Form(60),
     auto_duration: bool = Form(False),
-    filename_keywords: str = Form("")
+    filename_keywords: str = Form(""),
+    audio_file: UploadFile = File(None),
+    enable_audio: bool = Form(False),
+    music_volume: float = Form(0.7),
+    audio_start: float = Form(0.0), audio_end: float = Form(0.0),
+    replace_audio: bool = Form(False),
+    adaptive_folder_allocation: bool = Form(True)
 ):
     job_id = str(uuid.uuid4())
     now_str = time.strftime('%Y-%m-%d %H:%M:%S')
     banner_path = await _save_banner_upload(banner_file, job_id)
+    music_path = await _save_music_upload(audio_file, job_id) if enable_audio else None
     jobs[job_id] = {"id": job_id, "status": "queued", "progress": 0,
                      "shorts_count": shorts_count, "short_length": short_length,
                      "source": "folder", "created_at": now_str, "shorts": []}
     save_jobs()
     add_job_log(job_id, f"Folder: {len(files)} videos", "info")
+    if music_path:
+        add_job_log(job_id, "Music track added (volume {:.0f}%)".format(music_volume * 100), "info")
 
     # Save all files first
     video_paths = []
@@ -1455,14 +1966,16 @@ async def upload_folder(
 
     started = _enqueue_job(_process_folder_thread, (
         job_id, video_paths, short_length, shorts_count,
-        blurred_bg, crop_fill, smart_selection,
+        crop_mode, blurred_bg, smart_selection,
         save_video, save_folder,
         banner_enabled, banner_x, banner_y,
         banner_w, banner_h, banner_opacity,
         filename_keywords,
         banner_path, banner_style, banner_position, banner_duration,
         banner_full_duration,
-        min_short_length, max_short_length, auto_duration
+        min_short_length, max_short_length, auto_duration,
+        music_path, music_volume, audio_start, audio_end, replace_audio,
+        scene_start, subtitle_font or None, adaptive_folder_allocation
     ))
 
     return {"job_id": job_id, "status": "started" if started else "queued"}

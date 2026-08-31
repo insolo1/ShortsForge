@@ -1,367 +1,172 @@
-# Video to Shorts Bot
+# VideoBot — AI Shorts Generator
 
-FastAPI-приложение для нарезки длинных видео на вертикальные Shorts/Reels: транскрипция faster-whisper, умный отбор фрагментов, субтитры ASS, баннеры, AI-метаданные и публикация на YouTube.
+Turn long videos into viral vertical Shorts/Reels/TikToks automatically.
 
-## Текущее состояние
+**Features:**
+- 🎬 Smart AI selection of best moments (Whisper + InterestNet + LLM)
+- 📱 Vertical 1080×1920 render with animated subtitles
+- 🎯 Pause mode: freeze frame + banner overlay + banner audio
+- 🤖 AI titles, descriptions, tags (Groq/OpenAI)
+- 📺 YouTube OAuth + direct upload
+- 🐳 Docker ready for servers
 
-Основной рабочий контур находится в **app/main.py** и **app/processor.py**. Каталоги **app/api**, **app/tasks**, **app/repositories**, **app/services** и **app/models** содержат модульную архитектуру, но веб-интерфейс и актуальные маршруты пока обслуживаются монолитным FastAPI-приложением из **app/main.py**.
+---
 
-Недавние изменения:
+## Quick Start
 
-- smart-selection гарантированно добирает запрошенное число непересекающихся фрагментов, если исходник достаточно длинный;
-- длинная непрерывная речь Whisper разбивается на ограниченные фразы и корректно участвует в скоринге;
-- AI-метаданные реально генерируются после рендера через Groq или OpenAI;
-- исправлена UTF-8 строка описания;
-- pause-баннер сохраняет заданную итоговую длительность ролика;
-- во время pause-баннера звучит только аудио баннера, без наложения основного голоса;
-- добавлены TikTok Sans и Montserrat Bold.
+### Option 1: Windows (Local)
+```powershell
+# 1. Install FFmpeg (add to system PATH)
+# Download: https://ffmpeg.org/download.html
 
-## Возможности
-
-- загрузка одного файла или папки с видео;
-- создание нескольких роликов параллельно;
-- фиксированная или автоматическая длительность;
-- smart-selection по транскрипции всего видео;
-- отдельный InterestNet-путь для видео длиннее двух часов;
-- вертикальный рендер 1080×1920;
-- crop-fill, обычный pad или размытый фон;
-- субтитры ASS с таймингами слов;
-- TikTok Sans, Montserrat, Montserrat Bold/ExtraBold/Black, Bebas Neue и Russo One;
-- баннер-картинка или MP4;
-- режим обычного overlay;
-- режим pause: заморозка кадра, баннер и его аудио, затем продолжение видео;
-- AI-заголовок, описание и теги;
-- локальные пользователи, роли, проекты и логи;
-- YouTube OAuth, несколько аккаунтов и загрузка роликов;
-- Docker-развёртывание на порту 8200.
-
-## Как устроен пайплайн
-
-1. Загруженный файл сохраняется в **uploads/**.
-2. FFmpeg определяет длительность и доступные потоки.
-3. Если smart-selection включён, faster-whisper моделью base транскрибирует всё видео.
-4. **VideoProcessor.extract_segments()** выбирает окна.
-5. Для каждого окна выполняется точная транскрипция выбранной моделью Whisper.
-6. FFmpeg строит вертикальное видео, субтитры и баннер.
-7. AIService формирует заголовок, описание и теги.
-8. Результаты сохраняются в **output/** и доступны в интерфейсе/ZIP.
-
-Подробности:
-
-- [Smart Selection — руководство](docs/smart_selection.md)
-- [Smart Selection — алгоритм](docs/smart_selection_algo.md)
-- [Полный пайплайн](docs/full_pipeline.md)
-- [Рекомендуемые настройки](docs/optimal_settings.md)
-
-## Smart Selection и Auto-duration
-
-В UI доступны значения **off**, **global**, **parts** и **hybrid**.
-
-В текущей реализации:
-
-- **off** — последовательная нарезка без полного сканирования Whisper;
-- **global / parts / hybrid** — запускают один и тот же актуальный smart-движок глобального отбора;
-- названия Топ, Сетка и Гибрид сохранены в интерфейсе, но отдельные стратегии parts/hybrid пока не реализованы.
-
-Для видео до 7200 секунд используется текстовый score по шести признакам. Для более длинных видео включается InterestNet с текстовыми, аудио- и визуальными признаками.
-
-**Auto-duration** меняет длину каждого результата:
-
-1. базовый smart-отбор работает с окном max_length;
-2. внутри выбранного окна проверяются варианты от min_length до max_length;
-3. старт и длина перебираются с шагом 5 секунд;
-4. выбирается вариант с максимальным interest score.
-
-Если smart-отбор вернул меньше роликов, чем запросил пользователь, алгоритм добирает непересекающиеся окна по временной сетке. Максимальное число без перекрытий ограничено:
-
-~~~text
-floor(video_duration / short_length)
-~~~
-
-## Баннеры и длительность
-
-### Overlay
-
-Баннер отображается поверх основного видео. Выходное аудио берётся из первой аудиодорожки исходника:
-
-~~~text
--map 0:a:0?
-~~~
-
-Звук MP4-баннера в overlay не подмешивается, иначе речь накладывается на основной голос.
-
-### Pause
-
-В выбранной позиции:
-
-1. основной кадр замораживается;
-2. показывается баннер;
-3. воспроизводится только аудио баннера либо тишина, если аудиодорожки нет;
-4. основное видео продолжается.
-
-Пауза заменяет равный по длительности участок исходника. Поэтому ролик с заданной длиной 59 секунд и баннером 6 секунд остаётся длиной около 59 секунд, а не 65.
-
-## Требования
-
-- Python 3.11+
-- FFmpeg с libx264, AAC, libass/subtitles и drawtext
-- 8+ ГБ RAM для комфортной транскрипции
-- NVIDIA CUDA — опционально для локального faster-whisper/NVENC
-- Groq или OpenAI API key — опционально, для AI-метаданных
-- Google OAuth credentials — только для YouTube
-
-## Локальная установка
-
-### Windows PowerShell
-
-~~~powershell
-cd K:\DIY\videobot
-
+# 2. Clone & setup
+git clone https://github.com/YOUR_USERNAME/videobot.git
+cd videobot
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
 pip install -r requirements.txt
 
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-~~~
+# 3. Configure
+copy .env.example .env
+# Edit .env: add FFMPEG_PATH, GROQ_API_KEY, OPENAI_API_KEY
 
-Альтернативная точка запуска:
-
-~~~powershell
+# 4. Run
 python run.py
-~~~
+# Open http://127.0.0.1:8000
+```
 
-Открыть: http://127.0.0.1:8000
+### Option 2: Linux / Server (Docker)
+```bash
+git clone https://github.com/YOUR_USERNAME/videobot.git
+cd videobot
 
-FFmpeg должен быть доступен в PATH либо указан в **.env**:
-
-~~~env
-FFMPEG_PATH=ffmpeg
-~~~
-
-### Linux
-
-~~~bash
-sudo apt-get update
-sudo apt-get install -y ffmpeg
-
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-~~~
-
-## Docker
-
-Основной Compose-файл находится в корне проекта.
-
-~~~bash
-cd /path/to/videobot
-docker compose up -d --build videobot
-docker compose ps
-docker compose logs -f --tail=200 videobot
-~~~
-
-Сайт: http://SERVER_IP:8200
-
-Проброс портов:
-
-~~~text
-host 8200 -> container 8000
-~~~
-
-Исходники копируются внутрь образа через Dockerfile, поэтому после изменения Python/HTML/шрифтов нужен rebuild:
-
-~~~bash
-docker compose up -d --build --force-recreate videobot
-~~~
-
-Обычный restart нового кода в образ не добавляет.
-
-Контейнер работает от UID 1000. При проблемах с записью:
-
-~~~bash
+# 1. Prepare folders (UID 1000 for Docker)
+mkdir -p uploads output tokens google_credentials
 sudo chown -R 1000:1000 uploads output tokens google_credentials
-~~~
 
-Текущий Dockerfile устанавливает CPU-версию PyTorch. Для CUDA внутри контейнера нужны NVIDIA Container Toolkit, CUDA-совместимый образ/torch и включённый GPU-блок Compose. Наличие NVIDIA на хосте само по себе не делает текущий Docker-образ GPU-образом.
+# 2. Configure
+cp .env.example .env
+# Edit .env: add your API keys, FFMPEG_PATH=/usr/bin/ffmpeg
 
-## Настройки .env
+# 3. Run
+docker compose up -d --build videobot
+# Site: http://YOUR_SERVER_IP:8200
+```
 
-Минимальный пример:
+---
 
-~~~env
-FFMPEG_PATH=ffmpeg
+## Configuration (.env)
 
-WHISPER_MODEL=base
-SEGMENT_WORKERS=2
-VIDEO_PRESET=medium
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `FFMPEG_PATH` | Yes* | Path to ffmpeg binary (`/usr/bin/ffmpeg` on Linux) |
+| `GROQ_API_KEY` | No | For AI metadata (free at console.groq.com) |
+| `OPENAI_API_KEY` | No | Alternative AI provider |
+| `OPENAI_MODEL` | No | Default: `gpt-4o-mini` |
+| `WHISPER_MODEL` | No | `base`/`small`/`medium`/`large-v3-turbo` |
+| `VIDEO_PRESET` | No | `low`/`medium`/`high` (NVENC) |
 
-GROQ_API_KEY=
-OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.6-luna
-OPENAI_CHAT_MODEL=gpt-4o-mini
+*If ffmpeg is in system PATH, `FFMPEG_PATH` is optional.
 
-SUBTITLE_FONT=TikTok Sans
-SUBTITLE_STYLE=normal
-SUBTITLE_FONTSIZE=100
-SUBTITLE_FONTCOLOR=white
-SUBTITLE_POSITION_Y=1670
-SUBTITLE_CAPITALIZE=1
-SUBTITLE_BORDERW=3
-SUBTITLE_BORDERCOLOR=black
-SUBTITLE_BOX_BORDER=0
-SUBTITLE_BOX_COLOR=black@0.8
-SUBTITLE_SHADOW_X=2
-SUBTITLE_SHADOW_Y=2
-SUBTITLE_SHADOW_COLOR=black
-SUBTITLE_WORDS_COUNT=3
-SUBTITLE_WORD_FADE=1
-~~~
+---
 
-API-ключи также можно добавить в настройках интерфейса. В Docker надёжнее хранить постоянные ключи в **.env**: текущий Compose не монтирует **api_keys.json**, поэтому UI-ключи внутри контейнера могут исчезнуть после пересоздания.
+## Usage
 
-Не коммитьте реальные ключи, **client_secret.json**, OAuth-токены, пользовательские данные и содержимое uploads/output.
+1. **Open web UI** → `http://localhost:8000` (or `:8200` in Docker)
+2. **Upload video** — drag & drop or select folder
+3. **Configure**:
+   - Short length: 45–60 sec recommended
+   - Count per video: 2–4
+   - Smart selection: `hybrid` (best for most content)
+   - Banner: upload image/MP4, enable pause mode
+4. **Generate** → watch progress in real-time
+5. **Download** — individual MP4s or ZIP (auto-split by source, max 1.5 GB per ZIP)
+6. **Upload to YouTube** — connect OAuth, select account, publish
 
-## AI-метаданные
+---
 
-После успешного рендера каждый ролик получает:
+## Smart Selection Modes
 
-- title;
-- description в корректном UTF-8;
-- tags.
+| Mode | Best For |
+|------|----------|
+| `off` | Sequential cuts (serial content) |
+| `global` | Top highlights (reactions, gaming) |
+| `parts` | Even coverage (lectures, podcasts) |
+| `hybrid` | **Best all-rounder** — quality + coverage |
 
-Порядок провайдеров: Groq, затем OpenAI. Если провайдер недоступен или вернул невалидный JSON, используется безопасный локальный fallback.
+**Auto-duration** (enable in UI): adjusts each short 45–75 sec to fit complete thoughts.
 
-Для OpenAI используется Responses API, если установленный SDK его поддерживает. Модель задаётся через **OPENAI_MODEL**.
+---
 
-## Субтитры и шрифты
+## Pause Mode (Banner)
 
-Шрифты лежат в **fonts/** и передаются libass через fontsdir.
+Video pauses → banner shows + banner audio plays → video continues.
+- Banner audio: MP4 banner with sound, or silence (image banner)
+- Duration: banner's actual length (up to video segment)
+- Audio sync fixed: no overlap between main video and banner
 
-Доступны, среди прочих:
+---
 
-- TikTok Sans;
-- Montserrat;
-- Montserrat Bold;
-- Montserrat ExtraBold;
-- Montserrat Black;
-- Bebas Neue;
-- Russo One.
+## YouTube Upload
 
-TikTok Sans распространяется по SIL Open Font License 1.1; копия лицензии находится в **fonts/TikTok Sans OFL.txt**.
+1. Google Cloud Console → Enable **YouTube Data API v3**
+2. Create **OAuth 2.0 Desktop App** credentials
+3. Save as `client_secret.json` in project root
+4. In UI: Settings → YouTube Accounts → Add Account
+5. Authorize each channel once (tokens saved locally)
 
-## YouTube
+---
 
-1. Создайте проект в Google Cloud Console.
-2. Включите YouTube Data API v3.
-3. Создайте OAuth credentials типа Desktop app.
-4. Положите **client_secret.json** в корень или загрузите credentials через интерфейс.
-5. Авторизуйте нужные аккаунты.
+## Project Structure
 
-Токены сохраняются в **tokens/** и **google_credentials/**.
-
-## Данные проекта
-
-| Путь | Назначение |
-|---|---|
-| uploads/ | загруженные исходники и баннеры |
-| output/ | готовые ролики |
-| saved/ | сохранённые проекты/копии |
-| tokens/ | YouTube OAuth-токены |
-| google_credentials/ | credentials аккаунтов |
-| fonts/ | локальные шрифты |
-| jobs.json, job_logs.json | состояние и логи задач |
-| users.json, sessions.json | локальная авторизация |
-| videobot.db | SQLite/модульный слой БД |
-
-При ошибке подключения к внешней БД приложение продолжает работу на JSON-хранилищах.
-
-## Структура
-
-~~~text
+```
 videobot/
 ├── app/
-│   ├── main.py               # активное FastAPI-приложение
-│   ├── processor.py          # FFmpeg, Whisper, сегменты, субтитры
-│   ├── ai_service.py         # Groq/OpenAI метаданные
-│   ├── api_keys.py           # хранилище и маскирование ключей
-│   ├── segment_scorer.py     # InterestNet и признаки
-│   ├── youtube_api.py        # YouTube OAuth/upload
-│   ├── api/                  # модульные роуты (переходная архитектура)
-│   ├── tasks/                # Celery-задачи (переходная архитектура)
-│   └── repositories/         # SQLAlchemy repositories
-├── static/                   # текущий HTML/JS интерфейс
-├── frontend/                 # отдельный React/Vite frontend
-├── fonts/
-├── docs/
-├── tests/
-├── uploads/
-├── output/
+│   ├── main.py           # FastAPI app + routes
+│   ├── processor.py      # FFmpeg + Whisper pipeline
+│   ├── ai_service.py     # Groq/OpenAI metadata
+│   ├── youtube_api.py    # OAuth + upload
+│   └── processor.py      # Core video processing
+├── static/               # Web UI (HTML/JS)
+├── fonts/                # Subtitle fonts
+├── uploads/              # Input videos (gitignored)
+├── output/               # Generated shorts (gitignored)
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
-└── run.py
-~~~
+└── run.py                # Local entry point
+```
 
-## Диагностика
+---
 
-### Сайт не открывается
+## Hardware Requirements
 
-~~~bash
-docker compose ps
-docker compose logs --tail=200 videobot
-curl -v http://127.0.0.1:8200/
-~~~
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| RAM | 8 GB | 16+ GB |
+| GPU | None (CPU) | NVIDIA 8+ GB VRAM (NVENC + faster Whisper) |
+| Disk | 20 GB free | 100+ GB SSD |
+| CPU | 4 cores | 8+ cores |
 
-Статус должен быть **Up**, а в логах — запуск Uvicorn на 0.0.0.0:8000.
+---
 
-Ошибка **No module named uvicorn** означает, что образ собран без актуального requirements.txt. Пересоберите без кеша:
+## Troubleshooting
 
-~~~bash
-docker compose build --no-cache videobot
-docker compose up -d --force-recreate videobot
-~~~
+| Issue | Fix |
+|-------|-----|
+| `ffmpeg not found` | Install ffmpeg, add to PATH, or set `FFMPEG_PATH` in .env |
+| `CUDA out of memory` | Use smaller Whisper model (`base`), reduce `SEGMENT_WORKERS` |
+| `AI metadata failed` | Check API keys in .env, verify quota |
+| `YouTube upload 403` | Re-authorize account, check OAuth scopes |
+| `ZIP download fails` | Large archives >1.5 GB auto-split; download parts separately |
 
-### Создаётся меньше роликов
+---
 
-Проверьте строки:
+## License
 
-~~~text
-Scan done: ... words
-Found N segments
-~~~
+MIT License — see [LICENSE](LICENSE).
 
-Без перекрытия невозможно создать больше floor(duration / short_length). Если smart-кандидатов мало, актуальная версия автоматически включает time-grid fallback.
-
-### Ролик длиннее заданного
-
-В актуальном pause-режиме баннер входит в заданную длительность. Старые ролики нужно перерендерить. Проверьте, что контейнер действительно пересобран с новым **app/processor.py**.
-
-### AI-описание не создаётся
-
-Проверьте:
-
-- ключ присутствует в **.env** или интерфейсе;
-- в логе есть **Generating AI metadata...**;
-- затем появляется **[AI] Raw response** либо сообщение об ошибке провайдера.
-
-### Два голоса
-
-- overlay использует только первую аудиодорожку источника;
-- pause последовательно соединяет source-before, banner/silence и source-after;
-- звук не должен собираться через amix;
-- сравнивайте именно файл, который получил пользователь, а не старую CDN/браузерную копию.
-
-## Проверка изменений
-
-~~~bash
-python -m py_compile app/main.py app/processor.py app/ai_service.py
-pytest
-git diff --check
-~~~
-
-## Лицензирование
-
-Отдельный LICENSE для исходного кода проекта сейчас отсутствует. Не объявляйте проект MIT/Apache без добавления соответствующего файла. Встроенный TikTok Sans лицензирован отдельно по SIL OFL 1.1.
+**Third-party:**
+- TikTok Sans font: SIL OFL 1.1
+- FFmpeg: LGPL/GPL
+- faster-whisper, Python deps: their respective licenses

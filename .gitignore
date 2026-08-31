@@ -1,4 +1,6 @@
 .env
+# Снимок боевого сервера (секреты, токены, копия БД) — НИКОГДА не коммитить
+server/
 uploads/
 output/
 __pycache__/
@@ -13,3 +15,13 @@ job_logs.json
 jobs.json
 sessions.json
 users.json
+settings.json
+presets.json
+# Test artifacts
+test_*.py
+fix_echo*.py
+diagnose_*.py
+clean_*.py
+test_*.wav
+test_*.mp4
+banner.mp4
