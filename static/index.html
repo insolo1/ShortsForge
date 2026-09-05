@@ -16,6 +16,18 @@
             src: url("/fonts/Montserrat%20Bold.ttf") format("truetype");
             font-weight: 700;
         }
+        @font-face {
+            font-family: "Montserrat";
+            src: url("/fonts/Montserrat.ttf") format("truetype");
+        }
+        @font-face {
+            font-family: "Bebas Neue";
+            src: url("/fonts/Bebas%20Neue.ttf") format("truetype");
+        }
+        @font-face {
+            font-family: "Russo One";
+            src: url("/fonts/Russo%20One.ttf") format("truetype");
+        }
         body { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
         .card { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); }
         .progress-bar { transition: width 0.3s ease; }
@@ -27,7 +39,6 @@
             .tabs-row button { flex: 1 1 calc(20% - 0.5rem); min-width: 0; font-size: 0.75rem; padding: 0.5rem 0.3rem; }
             .cleanup-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
             .cleanup-btns button { flex: 0 0 auto; font-size: 0.75rem; padding: 0.5rem; }
-            @media (max-width: 640px) {
             .tabs-row button { flex: 1 1 calc(33.33% - 0.5rem); min-width: 0; font-size: 0.75rem; padding: 0.5rem 0.3rem; }
             .grid-cols-2, .grid-cols-3 { grid-template-columns: 1fr !important; }
             .preset-row { flex-direction: column; }
@@ -179,10 +190,16 @@
                     </label>
                 </div>
 
-                <div class="flex items-center gap-2 mb-4">
+                <div class="flex items-center gap-2 mb-2">
                     <input type="checkbox" id="folder-mode-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
                     <span class="text-sm text-gray-400">Папка с несколькими видео (обработать все)</span>
                 </div>
+                <label id="adaptive-folder-row" class="flex items-start gap-2 mb-4 ml-7 cursor-pointer opacity-50">
+                    <input type="checkbox" id="adaptive-folder-allocation" checked disabled class="w-5 h-5 mt-0.5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-400">Распределять количество по длительности
+                        <span class="block text-xs text-gray-500">Длинным исходникам больше шортсов. Снимите галочку, чтобы разделить количество поровну.</span>
+                    </span>
+                </label>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                     <div>
@@ -214,6 +231,12 @@
                         </label>
                     </div>
                     <div id="smart-desc-file" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
+                    <label class="flex items-start gap-2 mt-3 cursor-pointer">
+                        <input type="checkbox" id="scene-start-file" class="w-5 h-5 mt-0.5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Начинать лучший момент с новой сцены
+                            <span class="block text-xs text-gray-500">Топ, Сетка и Гибрид будут оценивать фрагменты только от найденных монтажных склеек.</span>
+                        </span>
+                    </label>
 
                     <div class="flex items-center gap-2 mt-3">
                         <input type="checkbox" id="auto-duration-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
@@ -237,13 +260,24 @@
                     <div id="estimate-file" class="w-full p-3 rounded-xl bg-gray-800/60 border border-gray-700 text-sm text-gray-300"></div>
                 </div>
 
-                <div class="flex items-center gap-2 mb-4">
-                    <input type="checkbox" id="blurred-bg-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
-                    <span class="text-sm text-gray-400">Размытый фон (9:16)</span>
+                <div class="mb-4">
+                    <label class="text-sm text-gray-400 block mb-2">Формат кадра</label>
+                    <div class="flex rounded-xl overflow-hidden border border-gray-700">
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition crop-mode-btn" data-tab="file" data-crop="original" style="background:#374151;color:#9CA3AF">
+                            <input type="radio" name="crop-mode-file" value="original" class="hidden"> 16:9
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition crop-mode-btn" data-tab="file" data-crop="square" style="background:#374151;color:#FCA5A5">
+                            <input type="radio" name="crop-mode-file" value="square" class="hidden" checked> 1:1
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition crop-mode-btn" data-tab="file" data-crop="vertical" style="background:#374151;color:#93C5FD">
+                            <input type="radio" name="crop-mode-file" value="vertical" class="hidden"> 9:16
+                        </label>
+                    </div>
+                    <div id="crop-desc-file" class="text-xs text-gray-500 mt-1">1:1 — квадратный кроп</div>
                 </div>
                 <div class="flex items-center gap-2 mb-4">
-                    <input type="checkbox" id="crop-fill-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
-                    <span class="text-sm text-gray-400">Увеличить видео (обрезать края, без полос)</span>
+                    <input type="checkbox" id="blurred-bg-file" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-400">Размытый фон</span>
                 </div>
 
                 <div class="flex items-center gap-2 mb-4">
@@ -264,6 +298,8 @@
                     </div>
                     
                     <div id="audio-settings-file" class="hidden">
+                        <label class="block text-sm text-gray-400 mb-2">Громкость: <span id="audio-volume-file-val">70%</span></label>
+                        <input type="range" id="audio-volume-file" min="0" max="100" value="70" class="w-full mb-3">
                         <label class="block text-sm text-gray-400 mb-2">Выбрать отрывок (секунды)</label>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-3">
                             <div>
@@ -293,6 +329,13 @@
                     <div id="logs-content" class="bg-black rounded p-3 h-48 overflow-y-auto font-mono text-xs text-green-400">
                         <div class="text-gray-500">Ожидание...</div>
                     </div>
+                    <div class="flex gap-4 mt-2 text-[10px] text-gray-500 font-mono">
+                        <span><span class="text-green-400">■</span> success</span>
+                        <span><span class="text-yellow-400">■</span> warning</span>
+                        <span><span class="text-red-400">■</span> error</span>
+                        <span><span class="text-blue-400">■</span> progress</span>
+                        <span><span class="text-gray-400">■</span> info</span>
+                    </div>
                 </div>
             </div>
 
@@ -306,12 +349,11 @@
                             <option value="TikTok Sans">TikTok Sans</option>
                             <option value="Montserrat Bold">Montserrat Bold</option>
                             <option value="Montserrat">Montserrat</option>
+                            <option value="Bebas Neue">Bebas Neue</option>
+                            <option value="Russo One">Russo One</option>
                             <option value="Arial">Arial</option>
                             <option value="Verdana">Verdana</option>
                             <option value="Impact">Impact</option>
-                            <option value="Roboto">Roboto</option>
-                            <option value="Open Sans">Open Sans</option>
-                            <option value="Ubuntu">Ubuntu</option>
                         </select>
                     </div>
                     <div>
@@ -329,6 +371,17 @@
                             class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
                     </div>
                 </div>
+                <div class="mb-4 rounded-xl border border-gray-700 bg-gray-800/50 p-3">
+                    <label class="block text-sm text-gray-300 mb-2">Загрузить свой шрифт (.ttf)</label>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <input type="file" id="font-upload-file" accept=".ttf,font/ttf"
+                            class="flex-1 p-2 rounded-lg bg-gray-900 border border-gray-700 text-sm">
+                        <button type="button" id="font-upload-btn"
+                            class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 transition">Загрузить</button>
+                    </div>
+                    <div id="font-upload-status" class="text-xs text-gray-500 mt-2">После загрузки шрифт автоматически выбирается. Также его можно выбрать или удалить из списка ниже.</div>
+                    <div id="font-user-list" class="mt-3 space-y-2"></div>
+                </div>
 
                 <h4 class="text-md font-semibold mb-3 mt-6">Распознавание речи (Whisper)</h4>
                 <div class="mb-4">
@@ -343,16 +396,36 @@
                     <p class="text-xs text-gray-500 mt-1">Чем крупнее модель — тем точнее субтитры, но дольше распознавание.</p>
                 </div>
 
+                <h4 class="text-md font-semibold mb-3 mt-6">AI-метаданные</h4>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+                    <div>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" id="ai-gen-title" checked class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                            <span class="text-sm text-gray-300">Генерировать заголовок</span>
+                        </label>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" id="ai-gen-description" checked class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                            <span class="text-sm text-gray-300">Генерировать описание</span>
+                        </label>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" id="ai-gen-tags" checked class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                            <span class="text-sm text-gray-300">Генерировать теги</span>
+                        </label>
+                    </div>
+                </div>
+
                 <h4 class="text-md font-semibold mb-3 mt-6">Анимация слов</h4>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Показывать слов</label>
                         <select id="subtitle-words-count" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                            <option value="1">1 слово</option>
+                            <option value="1" selected>1 слово</option>
                             <option value="2">2 слова</option>
                             <option value="3">3 слова</option>
-                            <option value="4">4 слова</option>
-                            <option value="3" selected>3 слова</option>
                             <option value="4">4 слова</option>
                             <option value="5">5 слов</option>
                         </select>
@@ -368,16 +441,16 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Цвет текста</label>
-                        <select id="subtitle-color" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                            <option value="white" selected>Белый</option>
-                            <option value="yellow">Желтый</option>
-                            <option value="red">Красный</option>
-                            <option value="green">Зеленый</option>
-                            <option value="blue">Синий</option>
-                            <option value="cyan">Голубой</option>
-                            <option value="magenta">Маджента</option>
-                            <option value="orange">Оранжевый</option>
-                        </select>
+                        <div class="flex items-center gap-3 mb-1">
+                            <input type="color" id="subtitle-color-picker" value="#ffffff"
+                                class="w-11 h-11 rounded cursor-pointer border border-gray-700 bg-gray-800 p-1">
+                            <div class="flex-1">
+                                <div class="flex justify-between text-xs text-gray-500 mb-1">
+                                    <span>Прозрачность</span><span id="subtitle-color-alpha-val">100%</span>
+                                </div>
+                                <input type="range" id="subtitle-color-alpha" min="0" max="100" value="100" class="w-full">
+                            </div>
+                        </div>
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Позиция Y (пикс)</label>
@@ -413,20 +486,24 @@
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Обводка (px)</label>
-                        <input type="number" id="subtitle-borderw" value="6" min="0" max="20"
+                        <input type="number" id="subtitle-borderw" value="0" min="0" max="20"
                             class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Цвет обводки</label>
-                        <select id="subtitle-bordercolor" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                            <option value="black" selected>Черный</option>
-                            <option value="white">Белый</option>
-                            <option value="yellow">Желтый</option>
-                            <option value="red">Красный</option>
-                            <option value="green">Зеленый</option>
-                            <option value="blue">Синий</option>
-                            <option value="none">Нет</option>
-                        </select>
+                        <div class="flex items-center gap-3 mb-1">
+                            <input type="color" id="subtitle-bordercolor-picker" value="#000000"
+                                class="w-11 h-11 rounded cursor-pointer border border-gray-700 bg-gray-800 p-1">
+                            <label class="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
+                                <input type="checkbox" id="subtitle-bordercolor-none" class="w-4 h-4 rounded bg-gray-800 border-gray-700"> Нет
+                            </label>
+                            <div class="flex-1">
+                                <div class="flex justify-between text-xs text-gray-500 mb-1">
+                                    <span>Прозрачность</span><span id="subtitle-bordercolor-alpha-val">100%</span>
+                                </div>
+                                <input type="range" id="subtitle-bordercolor-alpha" min="0" max="100" value="100" class="w-full">
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -439,11 +516,19 @@
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Цвет фона</label>
-                        <select id="subtitle-boxcolor" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                            <option value="black@0.8" selected>Черный (80%)</option>
-                            <option value="black@0.5">Черный (50%)</option>
-                            <option value="none">Нет</option>
-                        </select>
+                        <div class="flex items-center gap-3 mb-1">
+                            <input type="color" id="subtitle-boxcolor-picker" value="#000000"
+                                class="w-11 h-11 rounded cursor-pointer border border-gray-700 bg-gray-800 p-1">
+                            <label class="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
+                                <input type="checkbox" id="subtitle-boxcolor-none" class="w-4 h-4 rounded bg-gray-800 border-gray-700"> Нет
+                            </label>
+                            <div class="flex-1">
+                                <div class="flex justify-between text-xs text-gray-500 mb-1">
+                                    <span>Прозрачность</span><span id="subtitle-boxcolor-alpha-val">80%</span>
+                                </div>
+                                <input type="range" id="subtitle-boxcolor-alpha" min="0" max="100" value="80" class="w-full">
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -461,11 +546,19 @@
                     </div>
                     <div>
                         <label class="block text-sm text-gray-400 mb-2">Цвет тени</label>
-                        <select id="subtitle-shadowcolor" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                            <option value="black" selected>Черный</option>
-                            <option value="gray">Серый</option>
-                            <option value="none">Нет</option>
-                        </select>
+                        <div class="flex items-center gap-3 mb-1">
+                            <input type="color" id="subtitle-shadowcolor-picker" value="#000000"
+                                class="w-11 h-11 rounded cursor-pointer border border-gray-700 bg-gray-800 p-1">
+                            <label class="flex items-center gap-1 text-xs text-gray-400 cursor-pointer">
+                                <input type="checkbox" id="subtitle-shadowcolor-none" class="w-4 h-4 rounded bg-gray-800 border-gray-700"> Нет
+                            </label>
+                            <div class="flex-1">
+                                <div class="flex justify-between text-xs text-gray-500 mb-1">
+                                    <span>Прозрачность</span><span id="subtitle-shadowcolor-alpha-val">100%</span>
+                                </div>
+                                <input type="range" id="subtitle-shadowcolor-alpha" min="0" max="100" value="100" class="w-full">
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -476,30 +569,31 @@
                     </label>
                 </div>
 
-                <h4 class="text-md font-semibold mb-3 mt-6">Видео</h4>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                    <div>
-                        <label class="block text-sm text-gray-400 mb-2">Кадрирование</label>
-                        <select id="crop-mode" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                            <option value="9:16">9:16 (вертикально)</option>
-                            <option value="16:9">16:9 (горизонтально)</option>
-                            <option value="1:1">1:1 (квадрат)</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="flex items-center gap-2 cursor-pointer pt-6">
-                            <input type="checkbox" id="zoom-enabled" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
-                            <span class="text-sm text-gray-400">Zoom-эффект (динамическое кадрирование)</span>
-                        </label>
-                    </div>
-                </div>
-
                 <h4 class="text-md font-semibold mb-3 mt-6">Имена файлов</h4>
                 <div class="mb-4">
                     <label class="block text-sm text-gray-400 mb-2">Обязательные слова в названии MP4</label>
                     <input type="text" id="filename-keywords" placeholder="Например: shorts, viral"
                         class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none text-sm">
                     <p class="text-xs text-gray-500 mt-1">Через запятую. Добавляются в имя каждого файла.</p>
+                </div>
+
+                <h4 class="text-md font-semibold mb-3 mt-6">Шаблоны</h4>
+                <div class="mb-4">
+                    <div class="flex flex-col sm:flex-row gap-2 mb-3">
+                        <input type="text" id="preset-name" placeholder="Название шаблона"
+                            class="flex-1 p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                        <button id="save-preset-btn" class="px-6 py-3 rounded-xl font-bold bg-blue-600 hover:bg-blue-700 transition">
+                            Сохранить
+                        </button>
+                    </div>
+                    <div class="flex gap-2 mb-3">
+                        <select id="load-preset" class="flex-1 p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
+                            <option value="">-- Загрузить шаблон --</option>
+                        </select>
+                        <button id="delete-preset-btn" class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 transition text-sm" title="Удалить шаблон">
+                            ✕
+                        </button>
+                    </div>
                 </div>
 
                 <button id="save-settings-btn" class="w-full py-3 rounded-xl font-bold bg-green-600 hover:bg-green-700 transition">
@@ -581,30 +675,54 @@
                         class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none text-sm">Привет! Это тест субтитров</textarea>
                 </div>
                 <div class="flex items-center gap-3 mb-4">
-                    <label class="text-sm text-gray-400">Фон:</label>
-                    <select id="preview-bg-color" class="p-2 rounded-lg bg-gray-800 border border-gray-700 text-sm">
-                        <option value="black" selected>Черный</option>
-                        <option value="#1a1a2e">Тёмно-синий</option>
-                        <option value="#2d1b1b">Тёмно-красный</option>
-                        <option value="#1b2d1b">Тёмно-зелёный</option>
-                        <option value="#2d2d1b">Тёмно-жёлтый</option>
-                        <option value="white">Белый</option>
+                    <label for="preview-bg-color" class="text-sm text-gray-400">Цвет фона предпросмотра:</label>
+                    <input type="color" id="preview-bg-color" value="#000000"
+                        class="w-12 h-10 rounded cursor-pointer border border-gray-700 bg-gray-800 p-1">
+                </div>
+                <div class="flex items-center gap-3 mb-4">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="preview-blur-bg" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Размытый фон (только 16:9)</span>
+                    </label>
+                    <select id="preview-crop-mode" class="p-2 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none text-sm">
+                        <option value="original">16:9</option>
+                        <option value="square" selected>1:1</option>
+                        <option value="vertical">9:16</option>
                     </select>
                 </div>
+                <div class="flex items-center gap-3 mb-4">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="preview-rect-enable" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Показать прямоугольник (превью баннера)</span>
+                    </label>
+                </div>
+                <div class="flex items-center gap-3 mb-4" id="preview-rect-options" style="display: none;">
+                    <input type="color" id="preview-rect-color" value="#ff0000" class="w-11 h-11 rounded cursor-pointer border border-gray-700 bg-gray-800 p-1">
+                    <div class="flex-1">
+                        <div class="flex justify-between text-xs text-gray-500 mb-1">
+                            <span>Прозрачность</span><span id="preview-rect-alpha-val">80%</span>
+                        </div>
+                        <input type="range" id="preview-rect-alpha" min="0" max="100" value="80" class="w-full">
+                    </div>
+                </div>
                 <div class="flex justify-center mb-2">
-                    <div class="relative pt-5" style="width: 320px;">
+                    <div class="relative pt-5" style="width: 100%; max-width: 320px;">
                         <div class="absolute top-0 left-1/2 -translate-x-1/2 text-[10px] text-red-400/80 whitespace-nowrap">← граница кадра (1080) →</div>
-                        <div class="absolute top-5 bottom-0 border-l-2 border-dashed border-red-500/60 pointer-events-none" style="left: 70px;"></div>
-                        <div class="absolute top-5 bottom-0 border-l-2 border-dashed border-red-500/60 pointer-events-none" style="left: 250px;"></div>
-                        <div id="subtitle-preview" class="bg-black rounded-xl border border-gray-700 relative mx-auto" style="width: 180px; height: 320px;">
-                            <div id="preview-banner-layer" style="position: absolute; width: 100%; height: 100%; display: none;">
+                        <div class="absolute top-5 bottom-0 border-l-2 border-dashed border-red-500/60 pointer-events-none" style="left: calc(50% - 90px);"></div>
+                        <div class="absolute top-5 bottom-0 border-l-2 border-dashed border-red-500/60 pointer-events-none" style="left: calc(50% + 90px);"></div>
+                        <div id="subtitle-preview" class="bg-black rounded-xl border border-gray-700 relative mx-auto overflow-hidden" style="width: 180px; height: 320px;">
+                            <video id="preview-video-bg" muted loop playsinline
+                                style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(12px);transform:scale(1.12);display:none;"></video>
+                            <video id="preview-video-fg" muted loop playsinline
+                                style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;"></video>
+                            <div id="preview-banner-layer" style="position: absolute; z-index: 2; width: 100%; height: 100%; display: none;">
                                 <img id="preview-banner-img" style="width: 100%; height: auto; opacity: 1;">
                                 <video id="preview-banner-video" muted autoplay loop playsinline style="width: 100%; height: auto; opacity: 1; display: none;"></video>
                             </div>
-                            <div id="preview-subtitle-layer" style="position: absolute; width: 100%; text-align: center;">
+                            <div id="preview-rect-layer" style="position: absolute; z-index: 3; width: 100%; height: 100%; pointer-events: none;"></div>
+                            <div id="preview-subtitle-layer" style="position: absolute; z-index: 4; width: 100%; text-align: center;">
                                 <span id="preview-text-span" style="font-size: 12px; color: white; font-family: Arial, sans-serif; line-height: 1.2; padding: 4px 8px;">Привет! Это тест субтитров</span>
                             </div>
-                            <div class="absolute bottom-2 left-1/2 -translate-x-1/2 text-xs text-gray-600">9:16</div>
                         </div>
                     </div>
                 </div>
@@ -653,13 +771,24 @@
                     </div>
                 </div>
                 
-                <div class="flex items-center gap-2 mb-4">
-                    <input type="checkbox" id="integration-blurred-bg" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
-                    <span class="text-sm text-gray-400">Размытый фон (9:16)</span>
+                <div class="mb-4">
+                    <label class="text-sm text-gray-400 block mb-2">Формат кадра</label>
+                    <div class="flex rounded-xl overflow-hidden border border-gray-700">
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition crop-mode-btn" data-tab="integration" data-crop="original" style="background:#374151;color:#9CA3AF">
+                            <input type="radio" name="crop-mode-integration" value="original" class="hidden"> 16:9
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition crop-mode-btn" data-tab="integration" data-crop="square" style="background:#374151;color:#FCA5A5">
+                            <input type="radio" name="crop-mode-integration" value="square" class="hidden" checked> 1:1
+                        </label>
+                        <label class="flex-1 text-center py-2 text-xs cursor-pointer transition crop-mode-btn" data-tab="integration" data-crop="vertical" style="background:#374151;color:#93C5FD">
+                            <input type="radio" name="crop-mode-integration" value="vertical" class="hidden"> 9:16
+                        </label>
+                    </div>
+                    <div id="crop-desc-integration" class="text-xs text-gray-500 mt-1">1:1 — квадратный кроп</div>
                 </div>
                 <div class="flex items-center gap-2 mb-4">
-                    <input type="checkbox" id="integration-crop-fill" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
-                    <span class="text-sm text-gray-400">Увеличить видео (обрезать края, без полос)</span>
+                    <input type="checkbox" id="integration-blurred-bg" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
+                    <span class="text-sm text-gray-400">Размытый фон</span>
                 </div>
                 
                 <div class="mb-4">
@@ -679,6 +808,12 @@
                         </label>
                     </div>
                     <div id="smart-desc-integration" class="text-xs text-gray-500 mt-1">Выкл — просто нарезка подряд</div>
+                    <label class="flex items-start gap-2 mt-3 cursor-pointer">
+                        <input type="checkbox" id="scene-start-integration" class="w-5 h-5 mt-0.5 rounded bg-gray-800 border-gray-700">
+                        <span class="text-sm text-gray-400">Начинать лучший момент с новой сцены
+                            <span class="block text-xs text-gray-500">При включении режим «Выкл» недоступен; если склеек мало, результатов может быть меньше.</span>
+                        </span>
+                    </label>
 
                     <div class="flex items-center gap-2 mt-3">
                         <input type="checkbox" id="auto-duration-integration" class="w-5 h-5 rounded bg-gray-800 border-gray-700">
@@ -716,6 +851,8 @@
                     </div>
                     
                     <div id="audio-settings" class="hidden">
+                        <label class="block text-sm text-gray-400 mb-2">Громкость: <span id="audio-volume-val">70%</span></label>
+                        <input type="range" id="audio-volume" min="0" max="100" value="70" class="w-full mb-3">
                         <label class="block text-sm text-gray-400 mb-2">Выбрать отрывок (секунды)</label>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-3">
                             <div>
@@ -812,21 +949,6 @@
                     </div>
                 </div>
 
-                <h4 class="text-md font-semibold mb-3 mt-6">Шаблоны</h4>
-                
-                <div class="mb-4">
-                    <div class="flex flex-col sm:flex-row gap-2 mb-3">
-                        <input type="text" id="preset-name" placeholder="Название шаблона"
-                            class="flex-1 p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                        <button id="save-preset-btn" class="px-6 py-3 rounded-xl font-bold bg-blue-600 hover:bg-blue-700 transition">
-                            Сохранить
-                        </button>
-                    </div>
-                    <select id="load-preset" class="w-full p-3 rounded-xl bg-gray-800 border border-gray-700 focus:border-purple-500 focus:outline-none">
-                        <option value="">-- Загрузить шаблон --</option>
-                    </select>
-                </div>
-
                 <button id="start-integration-btn" class="w-full py-4 rounded-xl font-bold text-lg bg-gradient-to-r from-green-500 to-blue-600 hover:from-green-600 hover:to-blue-700 transition">
                     Запустить публикацию
                 </button>
@@ -914,6 +1036,6 @@
         <div id="shorts-list" class="space-y-6"></div>
     </div>
 
-    <script src="/static/script.js?v=28"></script>
+    <script src="/static/script.js?v=35"></script>
 </body>
 </html>

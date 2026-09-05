@@ -7,10 +7,11 @@ services:
     ports:
       - "8200:8000"
     volumes:
-      - ./.env:/app/.env:ro
+      - ./.env:/app/.env
       - ./users.json:/app/users.json
       - ./sessions.json:/app/sessions.json
       - ./presets.json:/app/presets.json
+      - ./fonts:/app/fonts
       - ./uploads:/app/uploads
       - ./output:/app/output
       - ./tokens:/app/tokens

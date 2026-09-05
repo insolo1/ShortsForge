@@ -1,19 +1,27 @@
 // Основной скрипт Video Bot
 
 let currentTab = 'file';
-let currentJobId = null;
+let currentJobId = sessionStorage.getItem('currentJobId') || null;
 let pollInterval = null;
 let lastShownLog = '';
 let logsPollingInterval = null;
 let currentShorts = [];
-window._sessionJobs = [];
+window._sessionJobs = currentJobId ? [currentJobId] : [];
 
-// Автоматическое удаление файлов задачи при закрытии страницы
+// Delete projects created by this page when it is closed. Active jobs are
+// marked by the backend and removed immediately after processing finishes.
+let closeCleanupSent = false;
 window.addEventListener('pagehide', () => {
-    if (window._sessionJobs && window._sessionJobs.length) {
-        const blob = new Blob([JSON.stringify({ job_ids: window._sessionJobs })], { type: 'application/json' });
-        navigator.sendBeacon('/api/cleanup-after-close', blob);
-    }
+    if (closeCleanupSent) return;
+    const jobIds = [...new Set(window._sessionJobs || [])].filter(Boolean);
+    if (!jobIds.length) return;
+    closeCleanupSent = true;
+    const payload = new Blob(
+        [JSON.stringify({ job_ids: jobIds })],
+        { type: 'application/json' }
+    );
+    navigator.sendBeacon('/api/cleanup-after-close', payload);
+    sessionStorage.removeItem('currentJobId');
 });
 
 // Этапы обработки
@@ -97,19 +105,150 @@ function safeAddListener(id, event, handler) {
     }
 }
 
-async function loadFonts() {
+async function loadFonts(preferredValue = null) {
     try {
         const res = await fetch('/api/fonts');
         const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Ошибка загрузки списка шрифтов');
         const sel = document.getElementById('subtitle-font');
-        if (sel && data.fonts) {
-            sel.innerHTML = data.fonts.map(f => `<option value="${f}">${f}</option>`).join('');
+        const items = Array.isArray(data.font_items)
+            ? data.font_items
+            : (data.fonts || []).map(font => ({ value: font, label: font }));
+        if (!sel) return;
+
+        const previous = preferredValue || sel.value;
+        sel.innerHTML = items
+            .map(item => '<option value="' + escapeHtml(item.value) + '">' + escapeHtml(item.label || item.value) + '</option>')
+            .join('');
+
+        const customFonts = items.filter(item => item.custom && item.url);
+        let style = document.getElementById('dynamic-preview-fonts');
+        if (!style) {
+            style = document.createElement('style');
+            style.id = 'dynamic-preview-fonts';
+            document.head.appendChild(style);
         }
+        style.textContent = customFonts.map(item =>
+            '@font-face{font-family:"' + String(item.value).replace(/"/g, '') + '";' +
+            'src:url("' + item.url + '?v=' + Date.now() + '") format("truetype");font-display:swap;}'
+        ).join('\n');
+        if (document.fonts?.load) {
+            await Promise.allSettled(customFonts.map(item => document.fonts.load('16px "' + item.value + '"')));
+        }
+
+        const values = items.map(item => item.value);
+        if (values.includes(previous)) sel.value = previous;
+        else if (values.includes('Montserrat')) sel.value = 'Montserrat';
+        else if (values.length) sel.value = values[0];
+
+        const list = document.getElementById('font-user-list');
+        if (list) {
+            if (!customFonts.length) {
+                list.innerHTML = '<div class="text-xs text-gray-500">У вас пока нет загруженных шрифтов.</div>';
+            } else {
+                list.innerHTML = customFonts.map(item => `
+                    <div class="flex items-center gap-2 rounded-lg bg-gray-900/70 border border-gray-700 px-3 py-2">
+                        <span class="flex-1 text-sm" style="font-family:'${escapeHtml(item.value)}'">${escapeHtml(item.font_name || item.label)}</span>
+                        <button type="button" class="font-select-own px-3 py-1 rounded bg-blue-600 hover:bg-blue-700 text-xs"
+                            data-font-value="${escapeHtml(item.value)}">Выбрать</button>
+                        <button type="button" class="font-delete-own px-3 py-1 rounded bg-red-600 hover:bg-red-700 text-xs"
+                            data-font-name="${escapeHtml(item.font_name)}">Удалить</button>
+                    </div>`
+                ).join('');
+                list.querySelectorAll('.font-select-own').forEach(button => {
+                    button.addEventListener('click', () => {
+                        sel.value = button.dataset.fontValue;
+                        document.getElementById('font-upload-status').textContent = 'Шрифт выбран. Он будет использован в следующей задаче.';
+                        updateSubtitlePreview();
+                    });
+                });
+                list.querySelectorAll('.font-delete-own').forEach(button => {
+                    button.addEventListener('click', () => deleteCustomFont(button.dataset.fontName));
+                });
+            }
+        }
+        updateSubtitlePreview();
     } catch (e) {
         console.error('Ошибка загрузки шрифтов:', e);
     }
 }
 
+async function deleteCustomFont(fontName) {
+    if (!fontName || !confirm('Удалить шрифт «' + fontName + '»?')) return;
+    const status = document.getElementById('font-upload-status');
+    try {
+        const response = await fetch('/api/fonts?font_name=' + encodeURIComponent(fontName), { method: 'DELETE' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || 'Ошибка удаления шрифта');
+        if (status) status.textContent = data.message || 'Шрифт удалён.';
+        await loadFonts('Montserrat');
+    } catch (error) {
+        if (status) status.textContent = 'Ошибка: ' + error.message;
+    }
+}
+
+async function uploadCustomFont() {
+    const input = document.getElementById('font-upload-file');
+    const status = document.getElementById('font-upload-status');
+    const button = document.getElementById('font-upload-btn');
+    const file = input?.files?.[0];
+    if (!file) {
+        if (status) status.textContent = 'Сначала выберите TTF-файл.';
+        return;
+    }
+    if (!file.name.toLowerCase().endsWith('.ttf')) {
+        if (status) status.textContent = 'Поддерживаются только файлы .ttf.';
+        return;
+    }
+    const formData = new FormData();
+    formData.append('font_file', file);
+    if (button) button.disabled = true;
+    if (status) status.textContent = 'Загрузка шрифта…';
+    try {
+        const response = await fetch('/api/fonts/upload', { method: 'POST', body: formData });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || 'Ошибка загрузки шрифта');
+        await loadFonts(data.font_value);
+        if (input) input.value = '';
+        if (status) status.textContent = data.message || 'Шрифт загружен и выбран.';
+    } catch (error) {
+        if (status) status.textContent = 'Ошибка: ' + error.message;
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+let previewVideoUrl = null;
+
+function setPreviewVideo(file) {
+    if (previewVideoUrl) {
+        URL.revokeObjectURL(previewVideoUrl);
+        previewVideoUrl = null;
+    }
+    const videos = [
+        document.getElementById('preview-video-bg'),
+        document.getElementById('preview-video-fg')
+    ].filter(Boolean);
+
+    if (!file || !file.type?.startsWith('video/')) {
+        videos.forEach(video => {
+            video.removeAttribute('src');
+            video.style.display = 'none';
+            video.load();
+        });
+        updateSubtitlePreview();
+        return;
+    }
+
+    previewVideoUrl = URL.createObjectURL(file);
+    videos.forEach(video => {
+        video.src = previewVideoUrl;
+        video.currentTime = 0;
+        video.load();
+        video.play().catch(() => {});
+    });
+    updateSubtitlePreview();
+}
 async function showDocsModal() {
     const modal = document.getElementById('docs-modal');
     const list = document.getElementById('docs-list');
@@ -159,6 +298,41 @@ async function logout() {
     window.location.href = '/login';
 }
 
+const CROP_DESCS = {
+    original: '16:9 — вписанный в кадр',
+    square: '1:1 — квадратный кроп',
+    vertical: '9:16 — заполнение кадра'
+};
+function getCropMode(tab) {
+    const checked = document.querySelector('.crop-mode-btn[data-tab="' + tab + '"] input:checked');
+    return checked?.value || 'square';
+}
+function getSmartMode(tab) {
+    const checked = document.querySelector('input[name="smart-mode-' + tab + '"]:checked');
+    return checked?.value || 'off';
+}
+function setCropMode(tab, mode) {
+    document.querySelectorAll('.crop-mode-btn[data-tab="' + tab + '"]').forEach(b => {
+        const isActive = b.dataset.crop === mode;
+        b.style.background = isActive ? '#1F2937' : '#374151';
+        b.style.opacity = isActive ? '1' : '0.6';
+        const radio = b.querySelector('input[type="radio"]');
+        if (radio) radio.checked = isActive;
+    });
+    const desc = document.getElementById('crop-desc-' + tab);
+    if (desc) desc.textContent = CROP_DESCS[mode] || '';
+    const blurCb = document.getElementById(tab === 'file' ? 'blurred-bg-file' : 'integration-blurred-bg');
+    if (blurCb) {
+        blurCb.disabled = mode === 'vertical';
+        if (mode === 'vertical') { blurCb.checked = false; blurCb.parentElement?.classList.add('opacity-40'); }
+        else blurCb.parentElement?.classList.remove('opacity-40');
+    }
+    const previewCrop = document.getElementById('preview-crop-mode');
+    if (previewCrop && tab === 'file') previewCrop.value = mode;
+    if (typeof updateEstimate === 'function') updateEstimate(tab);
+    if (typeof updateSubtitlePreview === 'function') updateSubtitlePreview();
+}
+
 // Инициализация после загрузки страницы
 document.addEventListener('DOMContentLoaded', async function() {
     console.log('Страница загружена');
@@ -188,10 +362,12 @@ document.addEventListener('DOMContentLoaded', async function() {
     safeAddListener('create-btn-file', 'click', createShortsFromFile);
     safeAddListener('download-all-zip-btn', 'click', downloadAllAsZip);
     safeAddListener('save-settings-btn', 'click', saveSettings);
+    safeAddListener('font-upload-btn', 'click', uploadCustomFont);
     safeAddListener('start-integration-btn', 'click', startIntegration);
     safeAddListener('upload-credentials-btn', 'click', uploadCredentials);
     safeAddListener('authorize-accounts-btn', 'click', authorizeAccounts);
     safeAddListener('save-preset-btn', 'click', savePreset);
+    safeAddListener('delete-preset-btn', 'click', deletePreset);
     safeAddListener('logout-btn', 'click', logout);
     safeAddListener('load-preset', 'change', loadPresetFromSelect);
     safeAddListener('refresh-accounts-btn', 'click', loadAccountsList);
@@ -219,18 +395,20 @@ document.addEventListener('DOMContentLoaded', async function() {
             }
             fileName.classList.remove('hidden');
         }
-        readFileVideoDuration(first, 'file');
+        readFileVideoDurations(Array.from(e.target.files || []), 'file');
+        setPreviewVideo(first);
     });
-    
+
     initTabs();
     await loadFonts();
     await loadStats();
     await loadSettings();
     loadApiKeys();
-    
+
     // ── Оценка времени обработки ──
     const WHISPER_FACTORS = { base: 1, small: 3.5, medium: 7, 'large-v3-turbo': 4, 'large-v3': 14 };
     window._videoDurations = { url: null, file: null, integration: null };
+    window._videoFolderInfo = { file: null, integration: null };
 
     // Smart mode selector
     const smartDescs = {
@@ -247,25 +425,47 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (rangeRow) rangeRow.classList.toggle('hidden', !isAuto);
         const lengthMap = { url: 'short-length', file: 'short-length-file', integration: 'integration-short-length' };
         const len = document.getElementById(lengthMap[tab]);
-        if (len) len.disabled = isAuto;
+        if (len) {
+            len.disabled = isAuto;
+            const parent = len.closest('div');
+            if (parent) parent.classList.toggle('hidden', isAuto);
+        }
+        updateEstimate(tab);
+    }
+
+    function setSmartMode(tab, mode) {
+        const input = document.querySelector('input[name="smart-mode-' + tab + '"][value="' + mode + '"]');
+        if (!input || input.disabled) return;
+        input.checked = true;
+        document.querySelectorAll('.smart-mode-btn[data-tab="' + tab + '"]').forEach(b => {
+            const active = b.dataset.mode === mode;
+            b.style.background = active ? '#1F2937' : '#374151';
+            b.style.opacity = active ? '1' : '0.6';
+        });
+        const desc = document.getElementById('smart-desc-' + tab);
+        if (desc) desc.textContent = smartDescs[mode] || '';
+        const autoDuration = document.getElementById('auto-duration-' + tab);
+        if (autoDuration) {
+            if (mode === 'off') {
+                autoDuration.checked = false;
+                autoDuration.disabled = true;
+                applyAutoDurationUI(tab, false);
+            } else {
+                autoDuration.disabled = false;
+            }
+        }
         updateEstimate(tab);
     }
 
     document.querySelectorAll('.smart-mode-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', (event) => {
+            event.preventDefault();
             const tab = btn.dataset.tab;
             const mode = btn.dataset.mode;
-            document.querySelectorAll(`.smart-mode-btn[data-tab="${tab}"]`).forEach(b => {
-                b.style.background = '#374151';
-                b.style.opacity = '0.6';
-            });
-            btn.style.background = '#1F2937';
-            btn.style.opacity = '1';
-            const desc = document.getElementById('smart-desc-' + tab);
-            if (desc) desc.textContent = smartDescs[mode] || '';
-            updateEstimate(tab);
+            const sceneStart = document.getElementById('scene-start-' + tab);
+            if (mode === 'off' && sceneStart?.checked) return;
+            setSmartMode(tab, mode);
         });
-        // init first as active
         if (btn.querySelector(':checked')) {
             btn.style.background = '#1F2937';
             btn.style.opacity = '1';
@@ -273,9 +473,44 @@ document.addEventListener('DOMContentLoaded', async function() {
     });
 
     ['file', 'integration'].forEach(tab => {
+        const checkbox = document.getElementById('scene-start-' + tab);
+        const offInput = document.querySelector('input[name="smart-mode-' + tab + '"][value="off"]');
+        const offButton = document.querySelector('.smart-mode-btn[data-tab="' + tab + '"][data-mode="off"]');
+        if (!checkbox || !offInput) return;
+        const syncSceneStart = () => {
+            const smartPanel = document.querySelector('.smart-mode-btn[data-tab="' + tab + '"]')?.closest('div')?.parentElement;
+            if (smartPanel) {
+                const label = smartPanel.querySelector('label.text-sm');
+                if (label) label.classList.toggle('hidden', checkbox.checked);
+                const btnsRow = smartPanel.querySelector('.flex.rounded-xl');
+                if (btnsRow) btnsRow.classList.toggle('hidden', checkbox.checked);
+                const desc = document.getElementById('smart-desc-' + tab);
+                if (desc) desc.classList.toggle('hidden', checkbox.checked);
+            }
+            offInput.disabled = checkbox.checked;
+            if (checkbox.checked && getTabMode(tab) === 'off') setSmartMode(tab, 'global');
+            updateEstimate(tab);
+        };
+        checkbox.addEventListener('change', syncSceneStart);
+        syncSceneStart();
+    });
+
+    ['file', 'integration'].forEach(tab => {
         const cb = document.getElementById('auto-duration-' + tab);
         if (cb) cb.addEventListener('change', () => applyAutoDurationUI(tab, cb.checked));
-        applyAutoDurationUI(tab, cb ? cb.checked : false);
+        setSmartMode(tab, getTabMode(tab));
+    });
+
+    // ── Crop mode buttons ──
+    document.querySelectorAll('.crop-mode-btn').forEach(btn => {
+        btn.addEventListener('click', (event) => {
+            event.preventDefault();
+            setCropMode(btn.dataset.tab, btn.dataset.crop);
+        });
+        if (btn.querySelector(':checked')) {
+            btn.style.background = '#1F2937';
+            btn.style.opacity = '1';
+        }
     });
 
     // ── Оценка времени обработки ──
@@ -298,8 +533,17 @@ document.addEventListener('DOMContentLoaded', async function() {
     function updateEstimate(tab) {
         const box = document.getElementById('estimate-' + tab);
         if (!box) return;
+
+        let videosCount = 1;
+        if (tab === 'file') {
+            const folderMode = document.getElementById('folder-mode-file')?.checked;
+            const files = document.getElementById('video-file')?.files;
+            if (folderMode && files && files.length > 1) videosCount = files.length;
+        }
+        const folderInfo = window._videoFolderInfo?.[tab];
         const knownDur = getVideoDurationSec(tab);
-        const videoSec = knownDur || 1200;   // запасной вариант — 20 мин
+        const videoSec = knownDur || (1200 * videosCount);
+        const firstVideoSec = folderInfo?.first || (knownDur ? knownDur / videosCount : 1200);
         const count = parseInt(document.getElementById(
             tab === 'url' ? 'shorts-count' : tab === 'file' ? 'shorts-count-file' : 'integration-shorts-count'
         )?.value) || 5;
@@ -314,51 +558,58 @@ document.addEventListener('DOMContentLoaded', async function() {
         const whisper = document.getElementById('whisper-model')?.value || 'base';
         const mode = getTabMode(tab);
 
-        const wf = WHISPER_FACTORS[whisper] || 1;
-        const smart = mode !== 'off' || auto;
-        // сканирование всего видео для отбора — всегда base, ~0.2с/с на этой машине (замер)
-        const scan = smart ? videoSec * 0.2 : 0;
-        // субтитры сегментов выбранной моделью (base-скан переиспользуется для base-модели)
-        const transcribeSeg = (smart && whisper === 'base') ? 0 : count * segLen * 0.1 * wf;
+        const TRANSCRIBE_FACTORS = {
+            base: 0.12,
+            small: 0.20,
+            medium: 0.35,
+            'large-v3-turbo': 0.35,
+            'large-v3': 0.55
+        };
+        const RENDER_FACTORS = { simple: 0.40, heavy: 0.55 };
+        const SELECTION_TIME = { off: 0, global: 10, parts: 5, hybrid: 15 };
+
+        const smart = mode !== 'off';
+        const scan = smart ? videoSec * TRANSCRIBE_FACTORS.base : 0;
+        const firstScan = smart ? firstVideoSec * TRANSCRIBE_FACTORS.base : 0;
+        const transcribeSeg = (smart && whisper === 'base')
+            ? 0
+            : count * segLen * (TRANSCRIBE_FACTORS[whisper] || TRANSCRIBE_FACTORS.base);
         const transcribe = scan + transcribeSeg;
-        // рендер: blur-фон + прожиг субтитров — дорого (~0.8с/с), простой рендер быстрее
+
         const blurCb = document.getElementById(tab === 'url' ? 'blurred-bg-url' : tab === 'file' ? 'blurred-bg-file' : 'integration-blurred-bg');
-        const cropCb = document.getElementById(tab === 'url' ? 'crop-fill-url' : tab === 'file' ? 'crop-fill-file' : 'integration-crop-fill');
-        const heavyRender = (blurCb && blurCb.checked) || (cropCb && cropCb.checked);
-        const renderFactor = heavyRender ? 0.8 : 0.35;
-        const render = count * segLen * renderFactor;
-        // отбор моментов: ≤2ч — быстрый текстовый анализ; >2ч — нейросеть (медленно)
-        const selection = mode === 'off' ? 0 : (videoSec > 7200 ? videoSec * 0.25 + 30 : 10);
-        const autoTime = auto ? count * 3 : 0;                 // уточнение длительности
-        const ai = count * 2;                                  // AI-метаданные
+        const cropMode = getCropMode(tab);
+        const heavyRender = !!(blurCb?.checked || cropMode !== 'original');
+        const render = count * segLen * (heavyRender ? RENDER_FACTORS.heavy : RENDER_FACTORS.simple);
 
-        const perSegment = (transcribeSeg + render) / count + ai / count + (auto ? 3 : 0);
-        // первый шортс включает одноразовый анализ всего видео
-        const firstShort = scan + perSegment;
-        let total = transcribe + render + selection + autoTime + ai;
-
-        // режим папки: несколько видео → умножаем общее время
-        let videosCount = 1;
-        if (tab === 'file') {
-            const folderMode = document.getElementById('folder-mode-file')?.checked;
-            const files = document.getElementById('video-file')?.files;
-            if (folderMode && files && files.length > 1) videosCount = files.length;
-        }
-        if (videosCount > 1) total = total * videosCount;
-        const countLabel = videosCount > 1 ? `${count} шт × ${videosCount} видео` : `${count} шт`;
+        const selectionPerVideo = SELECTION_TIME[mode] || 0;
+        const selection = selectionPerVideo * videosCount;
+        const autoTime = auto ? count * 1.5 : 0;
+        const aiEnabled = [
+            document.getElementById('ai-gen-title')?.checked,
+            document.getElementById('ai-gen-description')?.checked,
+            document.getElementById('ai-gen-tags')?.checked
+        ].filter(Boolean).length;
+        const ai = count * aiEnabled * 0.7;
+        const perSegment = (transcribeSeg + render + ai + autoTime) / Math.max(1, count);
+        const firstShort = firstScan + selectionPerVideo + perSegment;
+        const total = transcribe + render + selection + autoTime + ai;
+        const adaptiveFolder = document.getElementById('adaptive-folder-allocation')?.checked !== false;
+        const allocationLabel = adaptiveFolder ? 'по длительности' : 'поровну';
+        const countLabel = videosCount > 1
+            ? `${count} шт на всю папку (${videosCount} видео, ${allocationLabel})`
+            : `${count} шт`;
 
         const parts = [];
-        if (scan > 0) parts.push('Анализ всего видео для поиска моментов (один раз) — ' + fmtTime(scan));
-        if (mode !== 'off') parts.push('Отбор лучших моментов (алгоритм) — ' + fmtTime(selection));
+        if (scan > 0) parts.push('Анализ всех исходников — ' + fmtTime(scan));
+        if (mode !== 'off') parts.push('Отбор лучших моментов — ' + fmtTime(selection));
         if (transcribeSeg > 0) parts.push('Распознавание речи для субтитров (' + whisper + ') — ' + fmtTime(transcribeSeg));
         parts.push('Сборка видео — ' + fmtTime(render));
         if (auto) parts.push('Подбор длительности — ' + fmtTime(autoTime));
         parts.push('Метаданные AI — ' + fmtTime(ai));
 
         const modeLabel = (mode === 'off' ? 'простая нарезка' : mode) + (auto ? ' + авто-длительность' : '');
-
         const durText = knownDur
-            ? 'Длительность видео: ' + fmtTime(knownDur)
+            ? (videosCount > 1 ? 'Общая длительность папки: ' : 'Длительность видео: ') + fmtTime(knownDur)
             : (tab === 'file' ? 'Длительность определится после выбора файла' : 'Длительность определится после ввода ссылки');
 
         box.innerHTML = `
@@ -370,7 +621,6 @@ document.addEventListener('DOMContentLoaded', async function() {
             <div class="text-gray-500 text-xs space-y-0.5">${parts.map(p => '• ' + p).join('<br>')}</div>
         `;
     }
-
     function initEstimates() {
         ['file', 'integration'].forEach(tab => {
             const ids = [
@@ -388,25 +638,44 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
     }
     initEstimates();
+    document.getElementById('adaptive-folder-allocation')?.addEventListener('change', () => updateEstimate('file'));
     ['file', 'integration'].forEach(tab => updateEstimate(tab));
 
     // ── Авто-определение длительности видео ──
-    function readFileVideoDuration(file, tab) {
-        window._videoDurations[tab] = null;
-        if (!file) { updateEstimate(tab); return; }
-        const objUrl = URL.createObjectURL(file);
-        const v = document.createElement('video');
-        v.preload = 'metadata';
-        v.muted = true;
-        v.onloadedmetadata = () => {
-            if (isFinite(v.duration) && v.duration > 0) window._videoDurations[tab] = v.duration;
-            URL.revokeObjectURL(objUrl);
-            updateEstimate(tab);
-        };
-        v.onerror = () => { URL.revokeObjectURL(objUrl); updateEstimate(tab); };
-        v.src = objUrl;
+    function readOneFileVideoDuration(file) {
+        return new Promise(resolve => {
+            if (!file) return resolve(0);
+            const objUrl = URL.createObjectURL(file);
+            const v = document.createElement('video');
+            v.preload = 'metadata';
+            v.muted = true;
+            const finish = duration => {
+                URL.revokeObjectURL(objUrl);
+                resolve(isFinite(duration) && duration > 0 ? duration : 0);
+            };
+            v.onloadedmetadata = () => finish(v.duration);
+            v.onerror = () => finish(0);
+            v.src = objUrl;
+        });
     }
 
+    async function readFileVideoDurations(files, tab) {
+        window._videoDurations[tab] = null;
+        window._videoFolderInfo[tab] = null;
+        const selected = Array.from(files || []).filter(Boolean);
+        if (!selected.length) { updateEstimate(tab); return; }
+        const durations = await Promise.all(selected.map(readOneFileVideoDuration));
+        const valid = durations.filter(duration => duration > 0);
+        if (valid.length) {
+            window._videoDurations[tab] = valid.reduce((sum, duration) => sum + duration, 0);
+            window._videoFolderInfo[tab] = {
+                count: selected.length,
+                first: durations[0] || valid[0],
+                durations
+            };
+        }
+        updateEstimate(tab);
+    }
     let _urlDurTimer = null;
     const urlInput = document.getElementById('video-url');
     if (urlInput) {
@@ -424,13 +693,15 @@ document.addEventListener('DOMContentLoaded', async function() {
                     if (data.status === 'success' && data.duration) {
                         window._videoDurations.url = data.duration;
                     }
-                } catch (e) {}
+                } catch (e) {
+                    console.error('Ошибка получения информации о видео:', e);
+                }
                 updateEstimate('url');
             }, 1200);
         });
     }
-    
-    
+
+
     // Переключатели
     document.getElementById('integration-source').addEventListener('change', (e) => {
         const isFile = e.target.value === 'file';
@@ -440,27 +711,28 @@ document.addEventListener('DOMContentLoaded', async function() {
     });
 
     document.getElementById('integration-video-file').addEventListener('change', (e) => {
-        readFileVideoDuration(e.target.files[0], 'integration');
+        const file = e.target.files[0];
+        readFileVideoDurations([file], 'integration');
+        setPreviewVideo(file);
     });
-    
     document.getElementById('distribution-mode').addEventListener('change', (e) => {
         const isCustom = e.target.value === 'custom';
         document.getElementById('custom-distribution-input').classList.toggle('hidden', !isCustom);
     });
-    
+
     document.getElementById('enable-scheduled').addEventListener('change', (e) => {
         document.getElementById('scheduled-options').classList.toggle('hidden', !e.target.checked);
     });
-    
+
     // Переключатели музыки
     document.getElementById('enable-audio').addEventListener('change', (e) => {
         document.getElementById('audio-settings').classList.toggle('hidden', !e.target.checked);
     });
-    
+
     document.getElementById('enable-audio-file').addEventListener('change', (e) => {
         document.getElementById('audio-settings-file').classList.toggle('hidden', !e.target.checked);
     });
-    
+
     // Минимальная дата - сегодня
     const today = new Date().toISOString().split('T')[0];
     document.getElementById('schedule-start-date').setAttribute('min', today);
@@ -470,16 +742,20 @@ document.addEventListener('DOMContentLoaded', async function() {
         setTimeout(loadAccountsList, 100);
         setTimeout(loadPresets, 100);
     });
-    
+
     // Загружаем список аккаунтов при загрузке
     loadAccountsList();
-    
+
     // Обработчик для режима папки
     const folderCb = document.getElementById('folder-mode-file');
     const fileInput = document.getElementById('video-file');
     if (folderCb && fileInput) {
         folderCb.addEventListener('change', () => {
             try {
+                const adaptiveRow = document.getElementById('adaptive-folder-row');
+                const adaptiveInput = document.getElementById('adaptive-folder-allocation');
+                if (adaptiveRow) adaptiveRow.classList.toggle('opacity-50', !folderCb.checked);
+                if (adaptiveInput) adaptiveInput.disabled = !folderCb.checked;
                 if (folderCb.checked) {
                     fileInput.setAttribute('webkitdirectory', '');
                     fileInput.setAttribute('multiple', '');
@@ -496,11 +772,49 @@ document.addEventListener('DOMContentLoaded', async function() {
             } catch(e) { console.warn('Folder mode error:', e); }
             fileInput.value = '';
             window._videoDurations.file = null;
+            window._videoFolderInfo.file = null;
             document.getElementById('file-name').classList.add('hidden');
             updateEstimate('file');
         });
+        const adaptiveRow = document.getElementById('adaptive-folder-row');
+        const adaptiveInput = document.getElementById('adaptive-folder-allocation');
+        if (adaptiveRow) adaptiveRow.classList.toggle('opacity-50', !folderCb.checked);
+        if (adaptiveInput) adaptiveInput.disabled = !folderCb.checked;
     }
-    
+
+    function bindFrameMode(blurId, tab) {
+        const blur = document.getElementById(blurId);
+        if (!blur) return;
+
+        const sync = () => {
+            const previewBlur = document.getElementById('preview-blur-bg');
+            const previewCrop = document.getElementById('preview-crop-mode');
+            if (previewBlur) previewBlur.checked = blur.checked;
+            if (previewCrop) previewCrop.value = getCropMode(tab);
+            updateEstimate(tab);
+            updateSubtitlePreview();
+        };
+        blur.addEventListener('change', sync);
+    }
+
+    bindFrameMode('blurred-bg-file', 'file');
+    bindFrameMode('integration-blurred-bg', 'integration');
+
+    const previewBlurControl = document.getElementById('preview-blur-bg');
+    const previewCropControl = document.getElementById('preview-crop-mode');
+    if (previewBlurControl && previewCropControl) {
+        previewBlurControl.addEventListener('change', () => {
+            const blur = document.getElementById('blurred-bg-file');
+            if (blur) blur.checked = previewBlurControl.checked;
+            updateSubtitlePreview();
+            updateEstimate('file');
+        });
+        previewCropControl.addEventListener('change', () => {
+            setCropMode('file', previewCropControl.value);
+            updateSubtitlePreview();
+            updateEstimate('file');
+        });
+    }
     // Обработчики для баннера
     ['url', 'file', 'integration', 'settings'].forEach(tab => {
         const cb = document.getElementById('banner-enabled-' + tab);
@@ -526,6 +840,26 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     });
 
+    // Scene start lock: disable shorts_count when scene_start is checked
+    function setupSceneStartLock(sceneId, countId) {
+        const sceneCb = document.getElementById(sceneId);
+        const countInput = document.getElementById(countId);
+        if (!sceneCb || !countInput) return;
+        sceneCb.addEventListener('change', () => {
+            countInput.disabled = sceneCb.checked;
+            if (sceneCb.checked) {
+                countInput.setAttribute('data-prev-val', countInput.value);
+                countInput.value = '';
+                countInput.placeholder = 'авто';
+            } else {
+                countInput.value = countInput.getAttribute('data-prev-val') || '5';
+                countInput.placeholder = '';
+            }
+        });
+    }
+    setupSceneStartLock('scene-start-file', 'shorts-count-file');
+    setupSceneStartLock('scene-start-integration', 'integration-shorts-count');
+
     // Показ/скрытие настроек паузы баннера
     const bannerStyleSel = document.getElementById('banner-style-settings');
     const bannerPauseRow = document.getElementById('banner-pause-settings');
@@ -545,7 +879,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         if (bannerFileInput) bannerFileInput.addEventListener('change', syncBannerStyle);
         syncBannerStyle();
     }
-    
+
     console.log('Инициализация завершена');
 });
 
@@ -624,6 +958,49 @@ async function removeApiKey(provider, index) {
 }
 
 // Загрузка настроек
+const _COLOR_NAMES = {
+    white: '#ffffff', black: '#000000', yellow: '#ffff00', red: '#ff0000',
+    green: '#00ff00', blue: '#0000ff', cyan: '#00ffff', magenta: '#ff00ff',
+    orange: '#ffa500', gray: '#808080'
+};
+
+function parseColorValue(v) {
+    // "black" / "#ff5733" / "black@0.8" / "#ff5733@0.5" / "none"
+    if (!v || v === 'none') return { color: '#000000', alpha: 100, none: true };
+    let c = String(v), alpha = 100;
+    if (c.includes('@')) {
+        const parts = c.split('@');
+        c = parts[0];
+        const a = parseFloat(parts[1]);
+        if (!isNaN(a)) alpha = Math.max(0, Math.min(100, Math.round(a * 100)));
+    }
+    const key = c.toLowerCase();
+    if (_COLOR_NAMES[key]) c = _COLOR_NAMES[key];
+    else if (!/^#[0-9a-fA-F]{6}$/.test(c)) c = '#ffffff';
+    return { color: c, alpha, none: false };
+}
+
+function buildColorValue(colorHex, alphaPct, none) {
+    if (none) return 'none';
+    const a = Math.max(0, Math.min(100, parseInt(alphaPct) || 0)) / 100;
+    if (a >= 1) return colorHex;
+    return colorHex + '@' + a.toFixed(2);
+}
+
+function applyColorSetting(storedVal, pickerId, alphaId, noneId, alphaLabelId) {
+    const p = parseColorValue(storedVal);
+    const picker = document.getElementById(pickerId);
+    const alpha = document.getElementById(alphaId);
+    const none = document.getElementById(noneId);
+    if (picker) picker.value = p.color;
+    if (alpha) {
+        alpha.value = p.alpha;
+        const lab = document.getElementById(alphaLabelId);
+        if (lab) lab.textContent = p.alpha + '%';
+    }
+    if (none) none.checked = p.none;
+}
+
 async function loadSettings() {
     try {
         const response = await fetch('/api/settings');
@@ -633,20 +1010,26 @@ async function loadSettings() {
             const s = data.settings;
             // Субтитры
             if (document.getElementById('subtitle-font')) {
-                document.getElementById('subtitle-font').value = s.font || 'Montserrat';
+                const fontSelect = document.getElementById('subtitle-font');
+                const requestedFont = s.font || 'Montserrat';
+                fontSelect.value = Array.from(fontSelect.options).some(option => option.value === requestedFont)
+                    ? requestedFont
+                    : (Array.from(fontSelect.options).some(option => option.value === 'Montserrat') ? 'Montserrat' : fontSelect.options[0]?.value || 'Arial');
                 document.getElementById('subtitle-style').value = s.style || 'normal';
                 document.getElementById('subtitle-fontsize').value = s.fontsize || 100;
-                document.getElementById('subtitle-fontsize-val').textContent = s.fontsize || 100;
-                document.getElementById('subtitle-color').value = s.fontcolor || 'white';
+                const fontsizeValue = document.getElementById('subtitle-fontsize-val');
+                if (fontsizeValue) fontsizeValue.textContent = s.fontsize || 100;
+                applyColorSetting(s.fontcolor, 'subtitle-color-picker', 'subtitle-color-alpha', null, 'subtitle-color-alpha-val');
                 document.getElementById('subtitle-position').value = s.position || 1670;
-                document.getElementById('subtitle-position-val').textContent = s.position || 1670;
+                const positionValue = document.getElementById('subtitle-position-val');
+                if (positionValue) positionValue.textContent = s.position || 1670;
                 document.getElementById('subtitle-borderw').value = s.borderw || 3;
-                document.getElementById('subtitle-bordercolor').value = s.bordercolor || 'black';
+                applyColorSetting(s.bordercolor, 'subtitle-bordercolor-picker', 'subtitle-bordercolor-alpha', 'subtitle-bordercolor-none', 'subtitle-bordercolor-alpha-val');
                 document.getElementById('subtitle-boxborder').value = s.boxborder ?? 0;
-                document.getElementById('subtitle-boxcolor').value = s.boxcolor || 'black@0.8';
+                applyColorSetting(s.boxcolor, 'subtitle-boxcolor-picker', 'subtitle-boxcolor-alpha', 'subtitle-boxcolor-none', 'subtitle-boxcolor-alpha-val');
                 document.getElementById('subtitle-shadowx').value = s.shadowx || 2;
                 document.getElementById('subtitle-shadowy').value = s.shadowy || 2;
-                document.getElementById('subtitle-shadowcolor').value = s.shadowcolor || 'black';
+                applyColorSetting(s.shadowcolor, 'subtitle-shadowcolor-picker', 'subtitle-shadowcolor-alpha', 'subtitle-shadowcolor-none', 'subtitle-shadowcolor-alpha-val');
                 document.getElementById('subtitle-capitalize').checked = s.capitalize !== false;
 
                 if (document.getElementById('subtitle-words-count')) {
@@ -660,13 +1043,6 @@ async function loadSettings() {
 
                 if (document.getElementById('api-provider') && s.api_provider) {
                     document.getElementById('api-provider').value = s.api_provider;
-                }
-
-                if (document.getElementById('crop-mode')) {
-                    document.getElementById('crop-mode').value = s.crop_mode || '9:16';
-                }
-                if (document.getElementById('zoom-enabled')) {
-                    document.getElementById('zoom-enabled').checked = s.zoom_enabled || false;
                 }
             }
 
@@ -692,26 +1068,36 @@ async function saveSettings() {
     const btn = document.getElementById('save-settings-btn');
     btn.disabled = true;
     btn.textContent = 'Сохраняем...';
-    
+
     try {
         const formData = new URLSearchParams();
-        
+
         // Субтитры
         formData.append('font', document.getElementById('subtitle-font')?.value || 'Montserrat');
         formData.append('style', document.getElementById('subtitle-style')?.value || 'normal');
         formData.append('fontsize', document.getElementById('subtitle-fontsize')?.value || '100');
-        formData.append('fontcolor', document.getElementById('subtitle-color')?.value || 'white');
+        formData.append('fontcolor', buildColorValue(
+            document.getElementById('subtitle-color-picker')?.value || '#ffffff',
+            document.getElementById('subtitle-color-alpha')?.value || '100', false));
         formData.append('position', document.getElementById('subtitle-position')?.value || '1670');
         formData.append('borderw', document.getElementById('subtitle-borderw')?.value || '3');
-        formData.append('bordercolor', document.getElementById('subtitle-bordercolor')?.value || 'black');
+        formData.append('bordercolor', buildColorValue(
+            document.getElementById('subtitle-bordercolor-picker')?.value || '#000000',
+            document.getElementById('subtitle-bordercolor-alpha')?.value || '100',
+            document.getElementById('subtitle-bordercolor-none')?.checked || false));
         formData.append('boxborder', document.getElementById('subtitle-boxborder')?.value || '0');
-        formData.append('boxcolor', document.getElementById('subtitle-boxcolor')?.value || 'black@0.8');
+        formData.append('boxcolor', buildColorValue(
+            document.getElementById('subtitle-boxcolor-picker')?.value || '#000000',
+            document.getElementById('subtitle-boxcolor-alpha')?.value || '80',
+            document.getElementById('subtitle-boxcolor-none')?.checked || false));
         formData.append('shadowx', document.getElementById('subtitle-shadowx')?.value || '2');
         formData.append('shadowy', document.getElementById('subtitle-shadowy')?.value || '2');
-        formData.append('shadowcolor', document.getElementById('subtitle-shadowcolor')?.value || 'black');
+        formData.append('shadowcolor', buildColorValue(
+            document.getElementById('subtitle-shadowcolor-picker')?.value || '#000000',
+            document.getElementById('subtitle-shadowcolor-alpha')?.value || '100',
+            document.getElementById('subtitle-shadowcolor-none')?.checked || false));
         formData.append('capitalize', document.getElementById('subtitle-capitalize')?.checked ?? false);
-        formData.append('crop_mode', document.getElementById('crop-mode')?.value || '9:16');
-        formData.append('zoom_enabled', document.getElementById('zoom-enabled')?.checked ?? false);
+        formData.append('crop_mode', '9:16');
 
         const apiKeyVal = document.getElementById('api-key-input')?.value?.trim();
         const apiProvider = document.getElementById('api-provider')?.value;
@@ -725,20 +1111,20 @@ async function saveSettings() {
         formData.append('words_count', wordsCountBackend);
         formData.append('word_fade', wordFadeVal ? 'true' : 'false');
         formData.append('whisper_model', document.getElementById('whisper-model')?.value || 'base');
-        
+
         // Баннер
         formData.append('banner_x', document.getElementById('banner-x-settings')?.value || '0');
         formData.append('banner_y', document.getElementById('banner-y-settings')?.value || '0');
         formData.append('banner_w', document.getElementById('banner-w-settings')?.value || '1080');
         formData.append('banner_h', document.getElementById('banner-h-settings')?.value || '200');
         formData.append('banner_opacity', document.getElementById('banner-opacity-settings')?.value || '100');
-        
+
         const response = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: formData
         });
-        
+
         const data = await response.json();
         if (data.status === 'success') {
             const keyInput = document.getElementById('api-key-input');
@@ -765,10 +1151,10 @@ const MAX_LOG_LINES = 200;
 function addLog(message, type = 'info') {
     const logsContent = document.getElementById('logs-content');
     const timestamp = new Date().toLocaleTimeString('ru-RU');
-    
+
     let color = 'text-green-400';
     let icon = '●';
-    
+
     if (type === 'error') {
         color = 'text-red-400';
         icon = '✗';
@@ -782,11 +1168,12 @@ function addLog(message, type = 'info') {
         color = 'text-blue-400';
         icon = '⟳';
     }
-    
+
+    const displayMessage = String(message ?? '').slice(0, 1000);
     const logLine = document.createElement('div');
     logLine.className = `${color} mb-1`;
-    logLine.innerHTML = `<span class="text-gray-500">[${timestamp}]</span> ${icon} ${message}`;
-    
+    logLine.innerHTML = `<span class="text-gray-500">[${timestamp}]</span> ${icon} ${escapeHtml(displayMessage)}`;
+
     logsContent.appendChild(logLine);
     if (logsContent.children.length > MAX_LOG_LINES) {
         logsContent.removeChild(logsContent.firstChild);
@@ -813,7 +1200,8 @@ function updateLastLog(message, type = 'info') {
     else if (type === 'warning') { color = 'text-yellow-400'; icon = '⚠'; }
     const timestamp = new Date().toLocaleTimeString('ru-RU');
     last.className = `${color} mb-1`;
-    last.innerHTML = `<span class="text-gray-500">[${timestamp}]</span> ${icon} ${message}`;
+    const displayMessage = String(message ?? '').slice(0, 1000);
+    last.innerHTML = `<span class="text-gray-500">[${timestamp}]</span> ${icon} ${escapeHtml(displayMessage)}`;
     logsContent.scrollTop = logsContent.scrollHeight;
 }
 
@@ -821,24 +1209,20 @@ function startLogsPolling(jobId) {
     if (logsPollingInterval) clearInterval(logsPollingInterval);
     currentJobId = jobId;
     let shownLogs = 0;
-    
+
     logsPollingInterval = setInterval(async () => {
         try {
-            const response = await fetch(`/api/logs/${jobId}`);
+            const response = await fetch(`/api/logs/${jobId}?after=${shownLogs}&limit=300`);
             const data = await response.json();
             const logs = data.logs || [];
-            const total = logs.length;
-            
-            if (total > shownLogs) {
-                for (let i = shownLogs; i < total; i++) {
-                    addLog(logs[i].message, logs[i].type || 'info');
-                }
-                shownLogs = total;
+            for (const log of logs) {
+                addLog(log.message, log.type || 'info');
             }
-            
+            shownLogs = Number.isFinite(data.next) ? data.next : shownLogs + logs.length;
+
             // Обновляем этапы интеграции
             updateIntegrationStages(data.status);
-            
+
             if (data.status === 'completed') {
                 addLog('Задача завершена!', 'success');
                 stopLogsPolling();
@@ -856,7 +1240,7 @@ function startLogsPolling(jobId) {
 function updateIntegrationStages(currentStatus) {
     const stagesList = document.getElementById('integration-stages-list');
     if (!stagesList) return;
-    
+
     const stages = [
         { id: 'init', name: 'Инициализация', status: 'waiting' },
         { id: 'download', name: 'Скачивание видео', status: 'waiting' },
@@ -865,7 +1249,7 @@ function updateIntegrationStages(currentStatus) {
         { id: 'schedule', name: 'Отложенная публикация', status: 'waiting' },
         { id: 'done', name: 'Завершено', status: 'waiting' }
     ];
-    
+
     let currentStageId = 'init';
     switch(currentStatus) {
         case 'downloading':
@@ -886,7 +1270,7 @@ function updateIntegrationStages(currentStatus) {
         default:
             currentStageId = 'init';
     }
-    
+
     stages.forEach(stage => {
         if (stage.id === currentStageId) {
             stage.status = 'in_progress';
@@ -896,7 +1280,7 @@ function updateIntegrationStages(currentStatus) {
             stage.status = 'waiting';
         }
     });
-    
+
     stagesList.innerHTML = stages.map(stage => {
         let icon = '⏳';
         let color = 'text-gray-500';
@@ -914,7 +1298,7 @@ function updateIntegrationStages(currentStatus) {
             </div>
         `;
     }).join('');
-    
+
     addLog(`Текущий этап: ${currentStatus}`, 'progress');
 }
 
@@ -923,7 +1307,7 @@ function stopLogsPolling() {
         clearInterval(logsPollingInterval);
         logsPollingInterval = null;
     }
-    
+
     // Сбрасываем флаг интеграции
     integrationRunning = false;
     const btn = document.getElementById('start-integration-btn');
@@ -989,10 +1373,10 @@ async function loadAccountsList() {
     try {
         const response = await fetch('/api/youtube/accounts');
         const data = await response.json();
-        
+
         const container = document.getElementById('accounts-list');
         const refreshBtn = document.getElementById('refresh-accounts-btn');
-        
+
         // Кратковременно меняем текст кнопки
         if (refreshBtn) {
             const originalText = refreshBtn.textContent;
@@ -1003,7 +1387,7 @@ async function loadAccountsList() {
                 refreshBtn.disabled = false;
             }, 1000);
         }
-        
+
         if (data.status === 'success' && data.accounts.length > 0) {
             container.innerHTML = data.accounts.map(acc => `
                 <div class="flex justify-between items-center gap-3 py-2 border-b border-gray-700">
@@ -1057,10 +1441,10 @@ async function loadPresets() {
     try {
         const response = await fetch('/api/presets/list');
         const data = await response.json();
-        
+
         const select = document.getElementById('load-preset');
-        select.innerHTML = '<option value="">-- Выберите схему --</option>';
-        
+        select.innerHTML = '<option value="">-- Выберите шаблон --</option>';
+
         if (data.status === 'success' && data.presets.length > 0) {
             data.presets.forEach(preset => {
                 const option = document.createElement('option');
@@ -1080,10 +1464,10 @@ async function createShortsFromFile() {
     const shortsCount = document.getElementById('shorts-count-file')?.value || '5';
     const btn = document.getElementById('create-btn-file');
     const folderMode = document.getElementById('folder-mode-file')?.checked;
-    
+
     btn.disabled = true;
     btn.textContent = 'Загружаем...';
-    
+
     try {
         const fileInput = document.getElementById('video-file');
         if (!fileInput.files[0]) {
@@ -1110,14 +1494,19 @@ async function createShortsFromFile() {
 
         formData.append('short_length', shortLength);
         formData.append('shorts_count', shortsCount);
+        if (folderMode) {
+            formData.append('adaptive_folder_allocation', String(document.getElementById('adaptive-folder-allocation')?.checked !== false));
+        }
         formData.append('smart_selection', document.querySelector('input[name="smart-mode-file"]:checked')?.value || 'off');
+        formData.append('scene_start', String(document.getElementById('scene-start-file')?.checked || false));
+        formData.append('subtitle_font', document.getElementById('subtitle-font')?.value || 'Montserrat');
         formData.append('auto_duration', String(document.getElementById('auto-duration-file')?.checked || false));
         formData.append('min_short_length', document.getElementById('auto-min-file')?.value || '30');
         formData.append('max_short_length', document.getElementById('auto-max-file')?.value || '60');
         formData.append('blurred_bg', String(document.getElementById('blurred-bg-file')?.checked || false));
-        formData.append('crop_fill', String(document.getElementById('crop-fill-file')?.checked || false));
+        formData.append('crop_mode', getCropMode('file'));
         formData.append('filename_keywords', document.getElementById('filename-keywords')?.value?.trim() || '');
-        
+
         // Баннер
         const bFile = document.getElementById('banner-enabled-file');
         formData.append('banner_enabled', String(bFile?.checked || false));
@@ -1134,7 +1523,26 @@ async function createShortsFromFile() {
             const bannerFile = document.getElementById('banner-file-settings')?.files?.[0];
             if (bannerFile) formData.append('banner_file', bannerFile);
         }
-        
+
+        // Музыка
+        const audioEnable = document.getElementById('enable-audio-file');
+        formData.append('enable_audio', String(audioEnable?.checked || false));
+        if (audioEnable?.checked) {
+            const audioFile = document.getElementById('audio-file')?.files?.[0];
+            if (audioFile) {
+                formData.append('audio_file', audioFile);
+                formData.append('audio_start', document.getElementById('audio-start-file')?.value || '0');
+                formData.append('audio_end', document.getElementById('audio-end-file')?.value || '30');
+                formData.append('music_volume', String((parseInt(document.getElementById('audio-volume-file')?.value || '70') / 100)));
+                formData.append('replace_audio', String(document.getElementById('replace-audio-file')?.checked || false));
+            }
+        }
+
+        // AI метаданные: чекбоксы для генерации заголовка, описания, тегов
+        formData.append('ai_gen_title', String(document.getElementById('ai-gen-title')?.checked || false));
+        formData.append('ai_gen_description', String(document.getElementById('ai-gen-description')?.checked || false));
+        formData.append('ai_gen_tags', String(document.getElementById('ai-gen-tags')?.checked || false));
+
         document.getElementById('progress-section')?.classList.remove('hidden');
         document.getElementById('results-section')?.classList.add('hidden');
         document.getElementById('shorts-list').innerHTML = '';
@@ -1147,9 +1555,9 @@ async function createShortsFromFile() {
         }
 
         const endpoint = folderMode ? '/api/upload-folder' : '/api/upload-file';
-        
+
         const xhr = new XMLHttpRequest();
-        
+
         xhr.upload.addEventListener('progress', (e) => {
             if (e.lengthComputable) {
                 const pct = Math.round((e.loaded / e.total) * 100);
@@ -1161,12 +1569,21 @@ async function createShortsFromFile() {
                 updateLastLog(`Загрузка: ${loadedMB}/${totalMB} МБ (${pct}%)`, 'progress');
             }
         });
-        
+
         xhr.addEventListener('load', () => {
             if (xhr.status >= 200 && xhr.status < 300) {
                 const data = JSON.parse(xhr.responseText);
                 currentJobId = data.job_id;
+                sessionStorage.setItem('currentJobId', currentJobId);
                 if (data.job_id && window._sessionJobs) window._sessionJobs.push(data.job_id);
+                // Never leave the submitted File object selected: otherwise a
+                // second click can silently upload the previous video again.
+                fileInput.value = '';
+                const selectedName = document.getElementById('file-name');
+                if (selectedName) {
+                    selectedName.textContent = '';
+                    selectedName.classList.add('hidden');
+                }
                 addLog('Файлы загружены! Обработка...', 'success');
                 btn.textContent = 'Обрабатываем...';
                 startPolling();
@@ -1176,13 +1593,13 @@ async function createShortsFromFile() {
                 btn.textContent = 'Создать Shorts';
             }
         });
-        
+
         xhr.addEventListener('error', () => {
             addLog('Ошибка сети при загрузке', 'error');
             btn.disabled = false;
             btn.textContent = 'Создать Shorts';
         });
-        
+
         xhr.open('POST', endpoint);
         xhr.send(formData);
     } catch (e) {
@@ -1216,20 +1633,29 @@ function startPolling() {
     if (pollInterval) clearInterval(pollInterval);
     let shownLogs = 0;
     let staleCount = 0;
-    
+
     document.getElementById('cancel-job-btn')?.classList.remove('hidden');
-    
+
     pollInterval = setInterval(async () => {
         const res = await fetch(`/api/status/${currentJobId}`);
         const data = await res.json();
-        
+
         const pb = document.getElementById('progress-bar');
         const pt = document.getElementById('progress-text');
         if (pb) pb.style.width = data.progress + '%';
-        if (pt) pt.textContent = getStatusText(data.status);
-        
+        if (pt) {
+            let statusText = getStatusText(data.status);
+            if (data.status === 'processing' && data.target_count > 0) {
+                statusText += ` ${data.completed_count || 0}/${data.target_count}`;
+                if (Number.isFinite(data.eta_seconds)) {
+                    statusText += ` · осталось ${fmtTime(data.eta_seconds)}`;
+                }
+            }
+            pt.textContent = statusText;
+        }
+
         updateStages(data.status);
-        
+
         if (data.status === 'completed' || data.status === 'failed' || data.status === 'cancelled') {
             clearInterval(pollInterval);
             document.getElementById('cancel-job-btn')?.classList.add('hidden');
@@ -1245,19 +1671,15 @@ function startPolling() {
             }
             loadStats();
         }
-        
+
         try {
-            const logsRes = await fetch(`/api/logs/${currentJobId}`);
+            const logsRes = await fetch(`/api/logs/${currentJobId}?after=${shownLogs}&limit=300`);
             const logsData = await logsRes.json();
             const logs = logsData.logs || [];
-            const total = logs.length;
-            
-            if (total > shownLogs) {
-                for (let i = shownLogs; i < total; i++) {
-                    addLog(logs[i].message, logs[i].type || 'info');
-                }
-                shownLogs = total;
+            for (const log of logs) {
+                addLog(log.message, log.type || 'info');
             }
+            shownLogs = Number.isFinite(logsData.next) ? logsData.next : shownLogs + logs.length;
         } catch(e) {}
     }, 2000);
 }
@@ -1278,13 +1700,13 @@ function showResults(shorts) {
     currentShorts = shorts;
     document.getElementById('progress-section')?.classList.add('hidden');
     document.getElementById('results-section')?.classList.remove('hidden');
-    
+
     const downloadBtn = document.getElementById('download-all-zip-btn');
     if (shorts.length > 0) {
         downloadBtn.classList.remove('hidden');
-        downloadBtn.textContent = '📦 Скачать все (' + shorts.length + ') в ZIP';
+        downloadBtn.textContent = '📦 Подготовить ZIP (' + shorts.length + ')';
     }
-    
+
     const container = document.getElementById('shorts-list');
     container.innerHTML = shorts.map(short => `
         <div class="card rounded-2xl p-6">
@@ -1293,11 +1715,11 @@ function showResults(shorts) {
                     Видео
                 </div>
                 <div class="flex-1">
-                    <input type="text" class="w-full bg-transparent text-xl font-bold mb-2 border-b border-gray-700 focus:border-purple-500 focus:outline-none" 
+                    <input type="text" class="w-full bg-transparent text-xl font-bold mb-2 border-b border-gray-700 focus:border-purple-500 focus:outline-none"
                         value="${short.title}" data-id="${short.id}" data-field="title">
-                    <textarea class="w-full bg-transparent text-gray-400 text-sm mb-2 border-b border-gray-700 focus:border-purple-500 focus:outline-none resize-none" 
+                    <textarea class="w-full bg-transparent text-gray-400 text-sm mb-2 border-b border-gray-700 focus:border-purple-500 focus:outline-none resize-none"
                         rows="2" data-id="${short.id}" data-field="description">${short.description}</textarea>
-                    <input type="text" class="w-full bg-transparent text-purple-400 text-sm border-b border-gray-700 focus:border-purple-500 focus:outline-none" 
+                    <input type="text" class="w-full bg-transparent text-purple-400 text-sm border-b border-gray-700 focus:border-purple-500 focus:outline-none"
                         value="${short.tags.join(', ')}" data-id="${short.id}" data-field="tags">
                 </div>
             </div>
@@ -1319,32 +1741,80 @@ async function saveChanges(shortId) {
     const title = card.querySelector('[data-field="title"]')?.value || '';
     const description = card.querySelector('[data-field="description"]')?.value || '';
     const tags = card.querySelector('[data-field="tags"]')?.value || '';
-    
+
     await fetch(`/api/update-short/${shortId}`, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: `title=${encodeURIComponent(title)}&description=${encodeURIComponent(description)}&tags=${encodeURIComponent(tags)}`
     });
-    
+
     alert('Сохранено!');
 }
 
 async function downloadAllAsZip() {
-    if (!currentJobId) return alert('Нет видео для скачивания');
-    
-    const btn = document.getElementById('download-all-zip-btn');
-    btn.textContent = 'Создаём ZIP...';
-    btn.disabled = true;
-    
-    const a = document.createElement('a');
-    a.href = `/api/download-zip/${currentJobId}`;
-    a.download = `shorts_${currentJobId}.zip`;
-    a.click();
-    
-    btn.textContent = '📦 Скачать все в ZIP';
-    btn.disabled = false;
-}
+    if (!currentJobId) return alert('Нет готовой задачи для скачивания');
 
+    const btn = document.getElementById('download-all-zip-btn');
+    const originalText = btn.textContent;
+    btn.textContent = 'Считаем ZIP-части...';
+    btn.disabled = true;
+
+    try {
+        const response = await fetch('/api/download-zip/' + encodeURIComponent(currentJobId) + '/manifest');
+        if (!response.ok) {
+            let message = 'Ошибка ZIP: HTTP ' + response.status;
+            try {
+                const data = await response.json();
+                message = data.message || data.detail || message;
+            } catch (_) {}
+            throw new Error(message);
+        }
+
+        const data = await response.json();
+        const parts = data.parts || data.data?.parts || [];
+        if (!parts.length) throw new Error('Сервер не нашёл готовых файлов');
+
+        let container = document.getElementById('download-zip-parts');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'download-zip-parts';
+            container.className = 'mt-3 p-4 rounded-xl bg-gray-900 border border-gray-700 space-y-2';
+            btn.insertAdjacentElement('afterend', container);
+        }
+        container.replaceChildren();
+
+        const title = document.createElement('div');
+        title.className = 'text-sm font-semibold text-gray-200';
+        title.textContent = parts.length === 1
+            ? 'Архив готов к скачиванию:'
+            : `Архив разделён на ${parts.length} части до 1,5 ГБ:`;
+        container.appendChild(title);
+
+        parts.forEach((part) => {
+            const link = document.createElement('a');
+            link.href = part.url;
+            link.className = 'block px-4 py-3 rounded-lg bg-green-700 hover:bg-green-600 transition text-sm';
+            const sizeGb = (Number(part.media_size || 0) / (1024 ** 3)).toFixed(2);
+            const folders = Array.isArray(part.folders) ? part.folders.join(', ') : '';
+            link.textContent = `⬇ ${part.filename} — ${sizeGb} ГБ${folders ? ' — ' + folders : ''}`;
+            link.title = 'ZIP создастся на сервере после нажатия; это может занять некоторое время';
+            container.appendChild(link);
+        });
+
+        const hint = document.createElement('div');
+        hint.className = 'text-xs text-gray-500';
+        hint.textContent = parts.length > 1
+            ? 'Скачивайте части по очереди. Каждая ссылка загружает ZIP напрямую, без хранения всего архива в памяти браузера.'
+            : 'ZIP загружается напрямую, без хранения всего архива в памяти страницы.';
+        container.appendChild(hint);
+    } catch (error) {
+        console.error('ZIP download failed:', error);
+        alert('Не удалось скачать ZIP: ' + error.message);
+    } finally {
+        btn.textContent = originalText;
+        btn.disabled = false;
+    }
+}
 // Запуск интеграции
 let integrationRunning = false;
 
@@ -1353,18 +1823,18 @@ async function startIntegration() {
         console.log('Интеграция уже запущена, пропускаем...');
         return;
     }
-    
+
     integrationRunning = true;
     const btn = document.getElementById('start-integration-btn');
     btn.disabled = true;
     btn.textContent = 'Запускаем...';
-    
+
     try {
         const formData = new FormData();
-        
+
         const source = document.getElementById('integration-source')?.value || 'url';
         formData.append('source', source);
-        
+
         if (source === 'url') {
             const url = document.getElementById('integration-video-url')?.value || '';
             if (!url) {
@@ -1384,10 +1854,10 @@ async function startIntegration() {
             }
             formData.append('video_file', file);
         }
-        
+
         // Показываем окно этапов
         document.getElementById('integration-stages-window')?.classList.remove('hidden');
-        
+
         const accounts = document.getElementById('youtube-accounts')?.value || '';
         if (!accounts.trim()) {
             alert('Добавьте хотя бы один YouTube аккаунт');
@@ -1402,8 +1872,10 @@ async function startIntegration() {
         formData.append('short_length', document.getElementById('integration-short-length')?.value || '45');
         formData.append('shorts_count', document.getElementById('integration-shorts-count')?.value || '5');
         formData.append('blurred_bg', String(document.getElementById('integration-blurred-bg').checked));
-        formData.append('crop_fill', String(document.getElementById('integration-crop-fill')?.checked || false));
+        formData.append('crop_mode', getCropMode('integration'));
         formData.append('smart_selection', document.querySelector('input[name="smart-mode-integration"]:checked')?.value || 'off');
+        formData.append('scene_start', String(document.getElementById('scene-start-integration')?.checked || false));
+        formData.append('subtitle_font', document.getElementById('subtitle-font')?.value || 'Montserrat');
         formData.append('auto_duration', String(document.getElementById('auto-duration-integration')?.checked || false));
         formData.append('min_short_length', document.getElementById('auto-min-integration')?.value || '30');
         formData.append('max_short_length', document.getElementById('auto-max-integration')?.value || '60');
@@ -1433,15 +1905,21 @@ async function startIntegration() {
                 formData.append('audio_file', audioFile);
                 formData.append('audio_start', document.getElementById('audio-start')?.value || '0');
                 formData.append('audio_end', document.getElementById('audio-end')?.value || '30');
+                formData.append('music_volume', String((parseInt(document.getElementById('audio-volume')?.value || '70') / 100)));
                 formData.append('replace_audio', document.getElementById('replace-audio')?.checked || false);
             }
         }
-        
+
+        // AI метаданные: чекбоксы для генерации заголовка, описания, тегов
+        formData.append('ai_gen_title', String(document.getElementById('ai-gen-title')?.checked || false));
+        formData.append('ai_gen_description', String(document.getElementById('ai-gen-description')?.checked || false));
+        formData.append('ai_gen_tags', String(document.getElementById('ai-gen-tags')?.checked || false));
+
         // Теги
         formData.append('enable_required_tags', document.getElementById('enable-required-tags')?.checked || false);
         formData.append('required_tags', document.getElementById('required-tags')?.value || '');
         formData.append('enable_optional_tags', document.getElementById('enable-optional-tags')?.checked || false);
-        
+
         // Отложенная публикация
         formData.append('enable_scheduled', document.getElementById('enable-scheduled')?.checked || false);
         if (document.getElementById('enable-scheduled')?.checked) {
@@ -1449,23 +1927,26 @@ async function startIntegration() {
             formData.append('schedule_start_time', document.getElementById('schedule-start-time')?.value || '12:00');
             formData.append('schedule_interval', document.getElementById('schedule-interval')?.value || '60');
         }
-        
+
         const response = await fetch('/api/integration/start', {
             method: 'POST',
             body: formData
         });
-        
+
         if (!response.ok) throw new Error('Ошибка запуска');
-        
+
         const data = await response.json();
-        
+        currentJobId = data.job_id;
+        sessionStorage.setItem('currentJobId', currentJobId);
+        if (data.job_id && window._sessionJobs) window._sessionJobs.push(data.job_id);
+
         // Показываем окно логов
         clearLogs();
         addLog(`Интеграция запущена! Job ID: ${data.job_id}`, 'success');
-        
+
         // Начинаем polling логов
         startLogsPolling(data.job_id);
-        
+
         btn.textContent = 'Запущено ✓';
         // НЕ сбрасываем кнопку сразу - ждем завершения задачи
     } catch (error) {
@@ -1481,7 +1962,7 @@ async function uploadCredentials() {
     const btn = document.getElementById('upload-credentials-btn');
     const email = document.getElementById('manual-account-email').value.trim();
     const fileInput = document.getElementById('manual-credentials-file');
-    
+
     if (!email) {
         alert('Введите email аккаунта');
         return;
@@ -1490,22 +1971,22 @@ async function uploadCredentials() {
         alert('Выберите client_secret.json файл');
         return;
     }
-    
+
     btn.disabled = true;
     btn.textContent = 'Загружаем...';
-    
+
     try {
         const formData = new FormData();
         formData.append('email', email);
         formData.append('credentials', fileInput.files[0]);
-        
+
         const response = await fetch('/api/youtube/upload-credentials', {
             method: 'POST',
             body: formData
         });
-        
+
         const data = await response.json();
-        
+
         if (data.status === 'success') {
             alert('Аккаунт ' + email + ' добавлен!');
             addEmailToAccountsField(email);
@@ -1515,10 +1996,10 @@ async function uploadCredentials() {
         } else {
             alert('Ошибка: ' + data.message);
         }
-        
+
         btn.disabled = false;
         btn.textContent = '✓ Добавить аккаунт';
-        
+
     } catch (error) {
         alert('Ошибка: ' + error.message);
         btn.textContent = '✓ Добавить аккаунт';
@@ -1535,23 +2016,23 @@ async function authorizeAccounts() {
         alert('Введите email аккаунта или сначала добавьте сохраненный аккаунт');
         return;
     }
-    
+
     btn.disabled = true;
     btn.textContent = 'Авторизация...';
-    
+
     try {
         for (let i = 0; i < emails.length; i++) {
             const email = emails[i];
             btn.textContent = `Авторизация ${i + 1}/${emails.length}: ${email}`;
-            
+
             const response = await fetch('/api/youtube/authorize', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({email: email})
             });
-            
+
             const data = await response.json();
-            
+
             if (data.status === 'success') {
                 console.log('OK ' + email + ' авторизован');
             } else if (data.status === 'needs_auth') {
@@ -1561,7 +2042,7 @@ async function authorizeAccounts() {
                 alert(`Ошибка авторизации ${email}: ${data.message}`);
             }
         }
-        
+
         alert(`Авторизация завершена! Авторизовано ${emails.length} аккаунтов.`);
         loadAccountsList();
         btn.textContent = '✓ Все аккаунты авторизованы';
@@ -1569,7 +2050,7 @@ async function authorizeAccounts() {
             btn.textContent = '🔐 Авторизовать';
             btn.disabled = false;
         }, 3000);
-        
+
     } catch (error) {
         alert('Ошибка: ' + error.message);
         btn.textContent = '🔐 Авторизовать';
@@ -1581,35 +2062,43 @@ async function authorizeAccounts() {
 async function savePreset() {
     const name = document.getElementById('preset-name').value.trim();
     if (!name) {
-        alert('Введите название схемы');
+        alert('Введите название шаблона');
         return;
     }
-    
+
     const preset = {
         name: name,
-        source: document.getElementById('integration-source').value,
-        short_length: document.getElementById('integration-short-length').value,
-        shorts_count: document.getElementById('integration-shorts-count').value,
-        // Субтитры больше не используются
-        distribution_mode: document.getElementById('distribution-mode').value,
-        custom_distribution: document.getElementById('custom-distribution').value,
-        videos_per_day: document.getElementById('videos-per-day').value,
-        enable_scheduled: document.getElementById('enable-scheduled').checked,
-        schedule_start_date: document.getElementById('schedule-start-date').value,
-        schedule_start_time: document.getElementById('schedule-start-time').value,
-        schedule_interval: document.getElementById('schedule-interval').value
+        // Субтитры
+        subtitle_font: document.getElementById('subtitle-font')?.value || 'Montserrat',
+        subtitle_fontsize: document.getElementById('subtitle-fontsize')?.value || '100',
+        subtitle_position: document.getElementById('subtitle-position')?.value || '1670',
+        subtitle_capitalize: document.getElementById('subtitle-capitalize')?.checked || false,
+        subtitle_borderw: document.getElementById('subtitle-borderw')?.value || '0',
+        subtitle_bordercolor: document.getElementById('subtitle-bordercolor-picker')?.value || '#000000',
+        subtitle_bordercolor_alpha: document.getElementById('subtitle-bordercolor-alpha')?.value || '100',
+        subtitle_bordercolor_none: document.getElementById('subtitle-bordercolor-none')?.checked || false,
+        subtitle_boxborder: document.getElementById('subtitle-boxborder')?.value || '0',
+        subtitle_boxcolor: document.getElementById('subtitle-boxcolor-picker')?.value || '#000000',
+        subtitle_boxcolor_alpha: document.getElementById('subtitle-boxcolor-alpha')?.value || '80',
+        subtitle_boxcolor_none: document.getElementById('subtitle-boxcolor-none')?.checked || false,
+        subtitle_shadowx: document.getElementById('subtitle-shadowx')?.value || '2',
+        subtitle_shadowy: document.getElementById('subtitle-shadowy')?.value || '2',
+        subtitle_shadowcolor: document.getElementById('subtitle-shadowcolor-picker')?.value || '#000000',
+        subtitle_shadowcolor_alpha: document.getElementById('subtitle-shadowcolor-alpha')?.value || '100',
+        subtitle_shadowcolor_none: document.getElementById('subtitle-shadowcolor-none')?.checked || false,
+        filename_keywords: document.getElementById('filename-keywords')?.value || '',
     };
-    
+
     try {
         const response = await fetch('/api/presets/save', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(preset)
         });
-        
+
         const data = await response.json();
         if (data.status === 'success') {
-            alert('Схема сохранена!');
+            alert('Шаблон сохранён!');
             document.getElementById('preset-name').value = '';
             loadPresets();
         } else {
@@ -1620,65 +2109,114 @@ async function savePreset() {
     }
 }
 
+// Удаление шаблона
+async function deletePreset() {
+    const select = document.getElementById('load-preset');
+    const name = select.value;
+    if (!name) {
+        alert('Выберите шаблон для удаления');
+        return;
+    }
+    if (!confirm('Удалить шаблон «' + name + '»?')) return;
+
+    try {
+        const response = await fetch('/api/presets/delete?name=' + encodeURIComponent(name), {
+            method: 'DELETE'
+        });
+        const data = await response.json();
+        if (data.status === 'success') {
+            alert('Шаблон удалён!');
+            loadPresets();
+        } else {
+            alert('Ошибка: ' + (data.message || 'Не удалось удалить'));
+        }
+    } catch (e) {
+        alert('Ошибка: ' + e.message);
+    }
+}
+
 // Загрузка шаблона из списка
 async function loadPresetFromSelect(e) {
     const name = e.target.value;
     if (!name) return;
-    
+
     try {
         const response = await fetch(`/api/presets/load?name=${encodeURIComponent(name)}`);
         const data = await response.json();
-        
+
         if (data.status === 'success' && data.preset) {
             const p = data.preset;
-            document.getElementById('integration-source').value = p.source || 'url';
-            document.getElementById('integration-short-length').value = p.short_length || 45;
-            document.getElementById('integration-shorts-count').value = p.shorts_count || 5;
-            // Субтитры больше не используются
-            document.getElementById('distribution-mode').value = p.distribution_mode || 'equal';
-            document.getElementById('custom-distribution').value = p.custom_distribution || '';
-            document.getElementById('videos-per-day').value = p.videos_per_day || 3;
-            document.getElementById('enable-scheduled').checked = p.enable_scheduled || false;
-            document.getElementById('schedule-start-date').value = p.schedule_start_date || today;
-            document.getElementById('schedule-start-time').value = p.schedule_start_time || '12:00';
-            document.getElementById('schedule-interval').value = p.schedule_interval || '60';
-            
-            // Обновляем зависимые поля
-            document.getElementById('integration-source').dispatchEvent(new Event('change'));
-            document.getElementById('distribution-mode').dispatchEvent(new Event('change'));
-            document.getElementById('enable-scheduled').dispatchEvent(new Event('change'));
-            
-            alert('Схема загружена!');
+
+            // Субтитры
+            if (p.subtitle_font) document.getElementById('subtitle-font').value = p.subtitle_font;
+            if (p.subtitle_fontsize) document.getElementById('subtitle-fontsize').value = p.subtitle_fontsize;
+            if (p.subtitle_position) document.getElementById('subtitle-position').value = p.subtitle_position;
+            if (p.subtitle_capitalize !== undefined) document.getElementById('subtitle-capitalize').checked = p.subtitle_capitalize;
+            if (p.subtitle_borderw !== undefined) document.getElementById('subtitle-borderw').value = p.subtitle_borderw;
+            if (p.subtitle_bordercolor) document.getElementById('subtitle-bordercolor-picker').value = p.subtitle_bordercolor;
+            if (p.subtitle_bordercolor_alpha !== undefined) document.getElementById('subtitle-bordercolor-alpha').value = p.subtitle_bordercolor_alpha;
+            if (p.subtitle_bordercolor_none !== undefined) document.getElementById('subtitle-bordercolor-none').checked = p.subtitle_bordercolor_none;
+            if (p.subtitle_boxborder !== undefined) document.getElementById('subtitle-boxborder').value = p.subtitle_boxborder;
+            if (p.subtitle_boxcolor) document.getElementById('subtitle-boxcolor-picker').value = p.subtitle_boxcolor;
+            if (p.subtitle_boxcolor_alpha !== undefined) document.getElementById('subtitle-boxcolor-alpha').value = p.subtitle_boxcolor_alpha;
+            if (p.subtitle_boxcolor_none !== undefined) document.getElementById('subtitle-boxcolor-none').checked = p.subtitle_boxcolor_none;
+            if (p.subtitle_shadowx !== undefined) document.getElementById('subtitle-shadowx').value = p.subtitle_shadowx;
+            if (p.subtitle_shadowy !== undefined) document.getElementById('subtitle-shadowy').value = p.subtitle_shadowy;
+            if (p.subtitle_shadowcolor) document.getElementById('subtitle-shadowcolor-picker').value = p.subtitle_shadowcolor;
+            if (p.subtitle_shadowcolor_alpha !== undefined) document.getElementById('subtitle-shadowcolor-alpha').value = p.subtitle_shadowcolor_alpha;
+            if (p.subtitle_shadowcolor_none !== undefined) document.getElementById('subtitle-shadowcolor-none').checked = p.subtitle_shadowcolor_none;
+            if (p.filename_keywords !== undefined) document.getElementById('filename-keywords').value = p.filename_keywords;
+
+            updateSubtitlePreview();
+            alert('Шаблон загружен!');
         }
     } catch (e) {
-        alert('Ошибка загрузки схемы: ' + e.message);
+        alert('Ошибка загрузки шаблона: ' + e.message);
     }
 }
 
 // ==================== Предпросмотр субтитров ====================
+
+function getPreviewFrameMetrics() {
+    return { format: '9:16', frameW: 1080, frameH: 1920, width: 180, height: 320 };
+}
 
 function updateSubtitlePreview() {
     const text = document.getElementById('preview-text')?.value || 'Текст субтитров';
     const font = document.getElementById('subtitle-font')?.value || 'Montserrat';
     const style = document.getElementById('subtitle-style')?.value || 'normal';
     const fontsize = parseInt(document.getElementById('subtitle-fontsize')?.value || '100');
-    const color = document.getElementById('subtitle-color')?.value || 'white';
+    const fontColorHex = document.getElementById('subtitle-color-picker')?.value || '#ffffff';
+    const fontAlpha = (parseInt(document.getElementById('subtitle-color-alpha')?.value || '100')) / 100;
     const position = parseInt(document.getElementById('subtitle-position')?.value || '1670');
     const borderw = parseInt(document.getElementById('subtitle-borderw')?.value || '3');
-    const bordercolor = document.getElementById('subtitle-bordercolor')?.value || 'black';
+    const borderColorHex = document.getElementById('subtitle-bordercolor-picker')?.value || '#000000';
+    const borderColorNone = document.getElementById('subtitle-bordercolor-none')?.checked || false;
+    const borderAlpha = (parseInt(document.getElementById('subtitle-bordercolor-alpha')?.value || '100')) / 100;
     const boxborder = parseInt(document.getElementById('subtitle-boxborder')?.value || '0');
-    const boxcolor = document.getElementById('subtitle-boxcolor')?.value || 'none';
+    const boxColorHex = document.getElementById('subtitle-boxcolor-picker')?.value || '#000000';
+    const boxColorNone = document.getElementById('subtitle-boxcolor-none')?.checked || false;
+    const boxAlpha = (parseInt(document.getElementById('subtitle-boxcolor-alpha')?.value || '80')) / 100;
     const shadowx = parseInt(document.getElementById('subtitle-shadowx')?.value || '2');
     const shadowy = parseInt(document.getElementById('subtitle-shadowy')?.value || '2');
-    const shadowcolor = document.getElementById('subtitle-shadowcolor')?.value || 'black';
+    const shadowColorHex = document.getElementById('subtitle-shadowcolor-picker')?.value || '#000000';
+    const shadowColorNone = document.getElementById('subtitle-shadowcolor-none')?.checked || false;
+    const shadowAlpha = (parseInt(document.getElementById('subtitle-shadowcolor-alpha')?.value || '100')) / 100;
     const capitalize = document.getElementById('subtitle-capitalize')?.checked || false;
     const previewBg = document.getElementById('preview-bg-color')?.value || 'black';
+    const metrics = getPreviewFrameMetrics();
+    const preview = document.getElementById('subtitle-preview');
+    if (preview) {
+        preview.style.width = metrics.width + 'px';
+        preview.style.height = metrics.height + 'px';
+    }
+    const previewScale = metrics.width / metrics.frameW;
 
-    const colors = {
-        white: '#FFFFFF', yellow: '#FFFF00', red: '#FF0000', green: '#00FF00',
-        blue: '#0000FF', cyan: '#00FFFF', magenta: '#FF00FF', orange: '#FFA500',
-        black: '#000000', gray: '#808080'
-    };
+    function rgba(hex, a) {
+        const h = hex.replace('#', '');
+        const r = parseInt(h.substr(0, 2), 16), g = parseInt(h.substr(2, 2), 16), b = parseInt(h.substr(4, 2), 16);
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+    }
 
     let finalText = text;
     if (capitalize) finalText = text.toUpperCase();
@@ -1687,9 +2225,10 @@ function updateSubtitlePreview() {
     if (!span) return;
 
     span.textContent = finalText;
-    span.style.fontFamily = font + ', sans-serif';
-    span.style.fontSize = Math.round(fontsize * 180 / 1080) + 'px';
-    span.style.color = colors[color] || color;
+    span.style.fontFamily = '"' + font + '", Arial, sans-serif';
+    if (document.fonts?.load) document.fonts.load('12px "' + font + '"').catch(() => {});
+    span.style.fontSize = Math.round(fontsize * previewScale) + 'px';
+    span.style.color = rgba(fontColorHex, fontAlpha);
     span.style.fontWeight = (style === 'bold' || style === 'bold_italic') ? 'bold' : 'normal';
     span.style.fontStyle = (style === 'italic' || style === 'bold_italic') ? 'italic' : 'normal';
 
@@ -1701,39 +2240,86 @@ function updateSubtitlePreview() {
     span.style.display = 'inline-block';
     span.style.maxWidth = '90%';
 
-    if (borderw > 0 && bordercolor !== 'none') {
-        span.style.webkitTextStroke = Math.round(borderw * 180 / 1080) + 'px ' + (colors[bordercolor] || bordercolor);
+    if (borderw > 0 && !borderColorNone) {
+        span.style.webkitTextStroke = Math.round(borderw * previewScale) + 'px ' + rgba(borderColorHex, borderAlpha);
     }
 
-    if ((shadowx > 0 || shadowy > 0) && shadowcolor !== 'none') {
-        span.style.textShadow = Math.round(shadowx * 180 / 1080) + 'px ' + Math.round(shadowy * 180 / 1080) + 'px 2px ' + (colors[shadowcolor] || shadowcolor);
+    if ((shadowx > 0 || shadowy > 0) && !shadowColorNone) {
+        span.style.textShadow = Math.round(shadowx * previewScale) + 'px ' + Math.round(shadowy * previewScale) + 'px 2px ' + rgba(shadowColorHex, shadowAlpha);
     }
 
-    if (boxborder > 0 && boxcolor !== 'none') {
-        if (boxcolor.includes('@')) {
-            const parts = boxcolor.split('@');
-            const alpha = parseFloat(parts[1]);
-            span.style.backgroundColor = 'rgba(0, 0, 0, ' + alpha + ')';
-        } else {
-            span.style.backgroundColor = colors[boxcolor] || boxcolor;
-        }
-        span.style.padding = Math.round(boxborder * 180 / 1080) + 'px';
+    if (boxborder > 0 && !boxColorNone) {
+        span.style.backgroundColor = rgba(boxColorHex, boxAlpha);
+        span.style.padding = Math.round(boxborder * previewScale) + 'px';
         span.style.borderRadius = '4px';
     }
 
     const layer = document.getElementById('preview-subtitle-layer');
     if (layer) {
         // в реальном рендере субтитры привязаны снизу (MarginV = 1920 - position)
-        const bottomMargin = Math.round((1920 - position) * 320 / 1920);
+        const bottomMargin = Math.round((1920 - position) * metrics.height / 1920);
         layer.style.top = 'auto';
         layer.style.bottom = bottomMargin + 'px';
     }
 
-    const preview = document.getElementById('subtitle-preview');
     if (preview) {
         preview.style.backgroundColor = previewBg;
     }
 
+    // Preview all frame modes, including blur + zoom together.
+    const previewBlur = document.getElementById('preview-blur-bg')?.checked || false;
+    const previewCropMode = document.getElementById('preview-crop-mode')?.value || 'original';
+    const backgroundVideo = document.getElementById('preview-video-bg');
+    const foregroundVideo = document.getElementById('preview-video-fg');
+    const hasPreviewVideo = !!(previewVideoUrl && foregroundVideo?.src);
+
+    if (preview) {
+        preview.style.filter = 'none';
+        preview.style.transform = 'none';
+    }
+    if (backgroundVideo) {
+        backgroundVideo.style.display = hasPreviewVideo && previewBlur ? 'block' : 'none';
+        backgroundVideo.style.objectPosition = '50% 50%';
+    }
+    if (foregroundVideo) {
+        foregroundVideo.style.display = hasPreviewVideo ? 'block' : 'none';
+        foregroundVideo.style.transform = 'none';
+        foregroundVideo.style.left = '0%';
+        foregroundVideo.style.inset = 'auto';
+        foregroundVideo.style.objectPosition = '50% 50%';
+        let wrapper = document.getElementById('preview-crop-wrapper');
+        if (previewCropMode === 'square') {
+            if (!wrapper) {
+                wrapper = document.createElement('div');
+                wrapper.id = 'preview-crop-wrapper';
+                wrapper.style.cssText = 'position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);height:56.25%;z-index:1;overflow:hidden;';
+                foregroundVideo.parentElement.insertBefore(wrapper, foregroundVideo);
+            }
+            if (foregroundVideo.parentElement !== wrapper) wrapper.appendChild(foregroundVideo);
+            foregroundVideo.style.position = 'relative';
+            foregroundVideo.style.objectFit = 'cover';
+            foregroundVideo.style.width = '100%';
+            foregroundVideo.style.height = '100%';
+            foregroundVideo.style.top = '0%';
+        } else {
+            if (wrapper && foregroundVideo.parentElement === wrapper) {
+                foregroundVideo.parentElement.parentElement.insertBefore(foregroundVideo, wrapper);
+                wrapper.remove();
+            }
+            foregroundVideo.style.position = 'absolute';
+            if (previewCropMode === 'vertical') {
+                foregroundVideo.style.objectFit = 'cover';
+                foregroundVideo.style.width = '100%';
+                foregroundVideo.style.height = '100%';
+                foregroundVideo.style.top = '0%';
+            } else {
+                foregroundVideo.style.objectFit = 'contain';
+                foregroundVideo.style.width = '100%';
+                foregroundVideo.style.height = '100%';
+                foregroundVideo.style.top = '0%';
+            }
+        }
+    }
     // Баннер в предпросмотре (показывается если галочка включена и выбран файл)
     const bannerEnabled = document.getElementById('banner-enabled-settings')?.checked || false;
     const bannerLayer = document.getElementById('preview-banner-layer');
@@ -1768,6 +2354,37 @@ function updateSubtitlePreview() {
             if (ro) ro.textContent = 'Баннер: файл не выбран';
         }
     }
+    const rectLayer = document.getElementById('preview-rect-layer');
+    const rectEnabled = document.getElementById('preview-rect-enable')?.checked || false;
+    if (rectLayer) {
+        let rect = document.getElementById('preview-rect-element');
+        if (!rect) {
+            rect = document.createElement('div');
+            rect.id = 'preview-rect-element';
+            rect.style.position = 'absolute';
+            rect.style.pointerEvents = 'none';
+            rectLayer.appendChild(rect);
+        }
+
+        if (rectEnabled) {
+            const bx = parseInt(document.getElementById('banner-x-settings')?.value || '0');
+            const by = parseInt(document.getElementById('banner-y-settings')?.value || '0');
+            const bw = parseInt(document.getElementById('banner-w-settings')?.value || '1080');
+            const bh = parseInt(document.getElementById('banner-h-settings')?.value || '200');
+            const alpha = (parseInt(document.getElementById('preview-rect-alpha')?.value || '80')) / 100;
+            rect.style.left = Math.round(bx * metrics.width / metrics.frameW) + 'px';
+            rect.style.top = Math.round(by * metrics.height / metrics.frameH) + 'px';
+            rect.style.width = Math.round(bw * metrics.width / metrics.frameW) + 'px';
+            rect.style.height = Math.round(bh * metrics.height / metrics.frameH) + 'px';
+            rect.style.backgroundColor = rgba(
+                document.getElementById('preview-rect-color')?.value || '#ff0000',
+                alpha
+            );
+            rect.style.display = 'block';
+        } else {
+            rect.style.display = 'none';
+        }
+    }
 }
 
 function applyBannerPreview(bannerImg, bannerVideo, bannerLayer, isVideo) {
@@ -1778,13 +2395,14 @@ function applyBannerPreview(bannerImg, bannerVideo, bannerLayer, isVideo) {
     let by = parseInt(document.getElementById('banner-y-settings')?.value || '0');
     const op = parseInt(document.getElementById('banner-opacity-settings')?.value || '100');
     const style = document.getElementById('banner-style-settings')?.value || 'overlay';
+    const metrics = getPreviewFrameMetrics();
     // в режиме "пауза по середине" баннер центрируется — как в реальном рендере
     if (style === 'pause') {
-        bx = (1080 - bw) / 2 + bx;
-        by = (1920 - bh) / 2 + by;
+        bx = (metrics.frameW - bw) / 2 + bx;
+        by = (metrics.frameH - bh) / 2 + by;
     }
-    const scaleW = 180 / 1080;
-    const scaleH = 320 / 1920;
+    const scaleW = metrics.width / metrics.frameW;
+    const scaleH = metrics.height / metrics.frameH;
     const el = isVideo ? bannerVideo : bannerImg;
     const other = isVideo ? bannerImg : bannerVideo;
     el.src = window._bannerPreviewUrl;
@@ -1802,7 +2420,7 @@ function applyBannerPreview(bannerImg, bannerVideo, bannerLayer, isVideo) {
     if (ro) {
         const fitW = Math.round(bw * scaleW);
         const fitH = Math.round(bh * scaleH);
-        const overflowNote = (bw > 1080 || bx < 0 || bx + bw > 1080 || by < 0 || by + bh > 1920)
+        const overflowNote = (bw > metrics.frameW || bx < 0 || bx + bw > metrics.frameW || by < 0 || by + bh > metrics.frameH)
             ? ' — ⚠ выходит за кадр' : '';
         ro.textContent = `Баннер: ${bw}×${bh} → в превью ${fitW}×${fitH} px${overflowNote}`;
     }
@@ -1811,48 +2429,90 @@ function applyBannerPreview(bannerImg, bannerVideo, bannerLayer, isVideo) {
 function initTabs() {}
 
 function initSubtitlePreview() {
-    const ids = ['subtitle-font', 'subtitle-style', 'subtitle-fontsize', 'subtitle-color',
-                 'subtitle-position', 'subtitle-borderw', 'subtitle-bordercolor', 'subtitle-boxborder', 'subtitle-boxcolor',
-                 'subtitle-shadowx', 'subtitle-shadowy', 'subtitle-shadowcolor',
-                 'preview-text', 'preview-bg-color',
-                 'banner-x-settings', 'banner-y-settings', 'banner-w-settings', 'banner-h-settings',
-                 'banner-style-settings', 'banner-opacity-settings'];
-    
-    ids.forEach(id => {
+    const ids = [
+        'subtitle-font', 'subtitle-style', 'subtitle-fontsize',
+        'subtitle-color-picker', 'subtitle-color-alpha',
+        'subtitle-position', 'subtitle-borderw',
+        'subtitle-bordercolor-picker', 'subtitle-bordercolor-alpha', 'subtitle-bordercolor-none',
+        'subtitle-boxborder', 'subtitle-boxcolor-picker', 'subtitle-boxcolor-alpha', 'subtitle-boxcolor-none',
+        'subtitle-shadowx', 'subtitle-shadowy',
+        'subtitle-shadowcolor-picker', 'subtitle-shadowcolor-alpha', 'subtitle-shadowcolor-none',
+        'preview-text', 'preview-bg-color', 'subtitle-capitalize',
+        'banner-x-settings', 'banner-y-settings', 'banner-w-settings', 'banner-h-settings',
+        'banner-style-settings', 'banner-opacity-settings',
+        'preview-blur-bg', 'preview-crop-mode', 'preview-rect-enable',
+        'preview-rect-color', 'preview-rect-alpha', 'banner-enabled-settings'
+    ];
+
+    [...new Set(ids)].forEach(id => {
         const el = document.getElementById(id);
-        if (el) {
-            el.addEventListener('input', updateSubtitlePreview);
-            el.addEventListener('change', updateSubtitlePreview);
+        if (!el) return;
+        el.addEventListener('input', updateSubtitlePreview);
+        el.addEventListener('change', updateSubtitlePreview);
+    });
+
+    [
+        ['subtitle-color-alpha', 'subtitle-color-alpha-val'],
+        ['subtitle-bordercolor-alpha', 'subtitle-bordercolor-alpha-val'],
+        ['subtitle-boxcolor-alpha', 'subtitle-boxcolor-alpha-val'],
+        ['subtitle-shadowcolor-alpha', 'subtitle-shadowcolor-alpha-val'],
+        ['preview-rect-alpha', 'preview-rect-alpha-val']
+    ].forEach(([sliderId, labelId]) => {
+        const slider = document.getElementById(sliderId);
+        const label = document.getElementById(labelId);
+        if (slider && label) {
+            const updateLabel = () => { label.textContent = slider.value + '%'; };
+            slider.addEventListener('input', updateLabel);
+            updateLabel();
         }
     });
 
-    const capEl = document.getElementById('subtitle-capitalize');
-    if (capEl) capEl.addEventListener('change', updateSubtitlePreview);
+    [
+        ['audio-volume', 'audio-volume-val'],
+        ['audio-volume-file', 'audio-volume-file-val']
+    ].forEach(([sliderId, labelId]) => {
+        const slider = document.getElementById(sliderId);
+        const label = document.getElementById(labelId);
+        if (slider && label) {
+            const updateLabel = () => { label.textContent = slider.value + '%'; };
+            slider.addEventListener('input', updateLabel);
+            updateLabel();
+        }
+    });
 
-    const bannerEnabled = document.getElementById('banner-enabled-settings');
-    if (bannerEnabled) bannerEnabled.addEventListener('change', updateSubtitlePreview);
+    const rectEnable = document.getElementById('preview-rect-enable');
+    const rectOptions = document.getElementById('preview-rect-options');
+    if (rectEnable && rectOptions) {
+        const syncRectOptions = () => {
+            rectOptions.style.display = rectEnable.checked ? 'flex' : 'none';
+        };
+        rectEnable.addEventListener('change', syncRectOptions);
+        syncRectOptions();
+    }
 
     updateSubtitlePreview();
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    initSubtitlePreview();
-});
-
+document.addEventListener('DOMContentLoaded', initSubtitlePreview);
 async function loadProjects() {
     try {
         const res = await fetch('/api/projects');
         const data = await res.json();
         const container = document.getElementById('projects-list');
         if (!container) return;
-        
+
         if (!data.projects || data.projects.length === 0) {
             container.innerHTML = '<p class="text-gray-500">Нет проектов</p>';
             return;
         }
-        
+
         container.innerHTML = data.projects.map(p => {
-            const date = new Date(p.created_at * 1000).toLocaleString('ru-RU');
+            const projectId = p.id || p.job_id;
+            if (!projectId) return '';
+            const createdAt = typeof p.created_at === 'number'
+                ? new Date(p.created_at * 1000)
+                : new Date(String(p.created_at || '').replace(' ', 'T'));
+            const date = Number.isNaN(createdAt.getTime()) ? '—' : createdAt.toLocaleString('ru-RU');
             const statusColors = { 'completed': 'text-green-400', 'failed': 'text-red-400', 'processing': 'text-blue-400', 'downloading': 'text-yellow-400' };
             const statusIcons = { 'completed': '✅', 'failed': '❌', 'processing': '🔄', 'downloading': '⏳' };
             const sc = statusColors[p.status] || 'text-gray-400';
@@ -1861,12 +2521,12 @@ async function loadProjects() {
             <div class="p-4 bg-gray-800 rounded-xl border border-gray-700">
                 <div class="flex items-center justify-between">
                     <div>
-                        <div class="font-medium">${si} ${p.job_id.substring(0, 8)}...</div>
+                        <div class="font-medium">${si} ${projectId.substring(0, 8)}...</div>
                         <div class="text-sm text-gray-500">${date}</div>
                         <div class="text-sm ${sc}">${p.status} — ${p.shorts_count} шортсов</div>
                         ${p.save_folder ? `<div class="text-xs text-gray-600">Папка: ${p.save_folder}</div>` : ''}
                     </div>
-                    <button onclick="deleteProject('${p.job_id}')" class="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-xs">🗑</button>
+                    <button onclick="deleteProject('${projectId}')" class="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-xs">🗑</button>
                 </div>
             </div>`;
         }).join('');
@@ -1881,10 +2541,15 @@ async function deleteProject(jobId) {
         const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
         const data = await res.json();
         if (data.status === 'success') {
+            window._sessionJobs = (window._sessionJobs || []).filter(id => id !== jobId);
+            if (currentJobId === jobId) {
+                currentJobId = null;
+                sessionStorage.removeItem('currentJobId');
+            }
+
             loadProjects();
         }
     } catch (e) {
         alert('Ошибка: ' + e.message);
     }
 }
-

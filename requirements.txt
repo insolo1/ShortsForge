@@ -37,3 +37,4 @@ PyYAML>=6.0
 
 # Utils
 yt-dlp
+markdown>=3.5.0

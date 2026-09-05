@@ -60,11 +60,11 @@ async def _set_groq_blocked(retry_after: int = 60):
 async def generate_metadata(transcript: str, short_num: int, video_info: dict = None) -> dict:
     client = await get_groq_client()
     if not client:
-        return _default_metadata(short_num)
+        return _default_metadata(short_num, "AI-метаданные не созданы: ключ Groq не настроен")
 
     if await is_groq_blocked():
         print("[GROQ] Skipped (blocked after previous error)")
-        return _default_metadata(short_num)
+        return _default_metadata(short_num, "Groq временно отключён после предыдущей ошибки или лимита")
 
     cache_key = f"meta:{hash(transcript)}"
     cached = await cache_get_json(cache_key)
@@ -73,7 +73,7 @@ async def generate_metadata(transcript: str, short_num: int, video_info: dict = 
 
     if not await check_groq_rate_limit():
         print("[GROQ] Rate limit reached, using fallback")
-        return _default_metadata(short_num)
+        return _default_metadata(short_num, "исчерпан дневной лимит Groq")
 
     video_title = video_info.get("title", "") if video_info else ""
 
@@ -126,22 +126,34 @@ async def generate_metadata(transcript: str, short_num: int, video_info: dict = 
             retry_after = int(e.headers.get("Retry-After", "60"))
         print(f"[GROQ] RateLimitError, retry-after={retry_after}s")
         await _set_groq_blocked(retry_after)
-        return _default_metadata(short_num)
+        return _default_metadata(short_num, f"исчерпан лимит Groq; повтор через {retry_after} сек.")
     except APIStatusError as e:
         retry_after = 120
         if hasattr(e, 'response') and e.response is not None:
             retry_after = int(e.response.headers.get("Retry-After", "120"))
         print(f"[GROQ] APIStatusError {e.status_code}, block {retry_after}s")
         await _set_groq_blocked(retry_after)
-        return _default_metadata(short_num)
+        status = getattr(e, "status_code", 0)
+        if status in (401, 403):
+            reason = "API-ключ Groq недействителен или у него нет доступа"
+        elif status >= 500:
+            reason = f"ошибка сервера Groq ({status})"
+        else:
+            reason = f"Groq отклонил запрос ({status})"
+        return _default_metadata(short_num, reason)
     except Exception as e:
         print(f"[GROQ] Error: {e}")
-        return _default_metadata(short_num)
+        raw = str(e).replace("\n", " ")[:240]
+        reason = "Groq вернул неверный JSON" if isinstance(e, json.JSONDecodeError) else raw
+        return _default_metadata(short_num, reason)
 
 
-def _default_metadata(short_num: int) -> dict:
-    return {
+def _default_metadata(short_num: int, ai_error: str = None) -> dict:
+    result = {
         "title": f"#shorts #тренд #{short_num}",
         "description": "Смотри до конца! Подпишись!",
         "tags": ["#shorts", "#viral", "#trending", "#fun", "#wow", "#amazing"]
     }
+    if ai_error:
+        result["_ai_error"] = ai_error
+    return result

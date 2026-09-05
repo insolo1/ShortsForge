@@ -29,23 +29,25 @@ def _sync_init():
         loop.close()
 
 
-async def _process_segment(processor, video_path, segment, i, job_id, subtitle_data, blurred_bg, crop_fill, banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity):
+async def _process_segment(processor, video_path, segment, i, job_id, subtitle_data, crop_mode, blurred_bg, banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity, subtitle_font="Montserrat"):
     short_path = await processor.create_short(
         video_path, segment, i, job_id, subtitle_data,
-        blurred_bg, "", crop_fill,
+        crop_mode, blurred_bg, "",
         banner_enabled, banner_path, banner_x, banner_y,
-        banner_w, banner_h, banner_opacity
+        banner_w, banner_h, banner_opacity,
+        subtitle_font_name=subtitle_font
     )
     return short_path
 
 
 async def _run_job(job_id: str, source: str, video_url: str, video_file_path: str,
                     short_length: int, shorts_count: int,
-                    blurred_bg: bool, crop_fill: bool,
+                    crop_mode: str, blurred_bg: bool,
                     save_video: bool, save_folder: str,
                     banner_enabled: bool, banner_path: str,
                     banner_x: int, banner_y: int, banner_w: int, banner_h: int, banner_opacity: int,
-                    smart_selection: str, distribution_mode: str, accounts: list,
+                    smart_selection: str, scene_start: bool, subtitle_font: str,
+                    distribution_mode: str, accounts: list,
                     enable_scheduled: bool, schedule_start_date: str, schedule_start_time: str, schedule_interval: int):
     """Core job logic - runs inside asyncio loop"""
     async with async_session_factory() as session:
@@ -78,7 +80,7 @@ async def _run_job(job_id: str, source: str, video_url: str, video_file_path: st
             if smart_selection and smart_selection != "off":
                 segments, _ = await _smart_select_segments(
                     processor, video_path, video_info["duration"],
-                    short_length, shorts_count, smart_selection
+                    short_length, shorts_count, smart_selection, scene_start
                 )
             else:
                 segments = await processor.extract_segments(video_path, short_length, shorts_count)
@@ -95,8 +97,9 @@ async def _run_job(job_id: str, source: str, video_url: str, video_file_path: st
                 short_path = await _process_segment(
                     processor, video_path, segment, i, job_id,
                     subtitle_data.get("segments"),
-                    blurred_bg, crop_fill, banner_enabled, banner_path,
-                    banner_x, banner_y, banner_w, banner_h, banner_opacity
+                    crop_mode, blurred_bg, banner_enabled, banner_path,
+                    banner_x, banner_y, banner_w, banner_h, banner_opacity,
+                    subtitle_font
                 )
 
                 if not short_path or not Path(short_path).exists():
@@ -110,6 +113,12 @@ async def _run_job(job_id: str, source: str, video_url: str, video_file_path: st
                     metadata = await groq.generate_metadata(
                         transcript_text, i + 1, video_info
                     )
+                    if metadata.get("_ai_error"):
+                        await repo.add_log(
+                            job_id,
+                            f"[{i+1}/{len(segments)}] AI fallback: {metadata['_ai_error']}",
+                            "warning"
+                        )
                     await repo.add_log(job_id, f"[{i+1}/{len(segments)}] Title: {metadata['title'][:50]}...", "info")
                 except Exception as e:
                     metadata = {"title": f"#shorts #{i+1}", "description": "Video short", "tags": ["#shorts"]}
@@ -179,9 +188,12 @@ async def _run_job(job_id: str, source: str, video_url: str, video_file_path: st
             traceback.print_exc()
 
 
-async def _smart_select_segments(processor, video_path, duration, short_length, shorts_count, mode):
+async def _smart_select_segments(processor, video_path, duration, short_length, shorts_count, mode, scene_start=False):
     from app.processor import VideoProcessor
-    segments = await processor.extract_segments(video_path, short_length, shorts_count)
+    segments = await processor.extract_segments(
+        video_path, short_length, shorts_count,
+        smart_selection=mode, scene_start=scene_start
+    )
     return segments, []
 
 
@@ -189,12 +201,13 @@ async def _smart_select_segments(processor, video_path, duration, short_length, 
 def process_video_task(self, job_id: str, source: str = "file",
                        video_url: str = None, video_file_path: str = None,
                        short_length: int = 45, shorts_count: int = 5,
-                       blurred_bg: bool = False, crop_fill: bool = False,
+                       crop_mode: str = "square", blurred_bg: bool = False,
                        save_video: bool = False, save_folder: str = "saved",
                        banner_enabled: bool = False, banner_path: str = None,
                        banner_x: int = 0, banner_y: int = 0,
                        banner_w: int = 1080, banner_h: int = 200, banner_opacity: int = 100,
                        smart_selection: str = "off",
+                       scene_start: bool = False, subtitle_font: str = "Montserrat",
                        distribution_mode: str = "equal", accounts: list = None,
                        enable_scheduled: bool = False,
                        schedule_start_date: str = None,
@@ -205,9 +218,9 @@ def process_video_task(self, job_id: str, source: str = "file",
         asyncio.run(_run_job(
             job_id, source, video_url, video_file_path,
             short_length, shorts_count,
-            blurred_bg, crop_fill, save_video, save_folder,
+            crop_mode, blurred_bg, save_video, save_folder,
             banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity,
-            smart_selection, distribution_mode, accounts or [],
+            smart_selection, scene_start, subtitle_font, distribution_mode, accounts or [],
             enable_scheduled, schedule_start_date, schedule_start_time, schedule_interval
         ))
     except RuntimeError:
@@ -218,9 +231,9 @@ def process_video_task(self, job_id: str, source: str = "file",
             loop.run_until_complete(_run_job(
                 job_id, source, video_url, video_file_path,
                 short_length, shorts_count,
-                blurred_bg, crop_fill, save_video, save_folder,
+                crop_mode, blurred_bg, save_video, save_folder,
                 banner_enabled, banner_path, banner_x, banner_y, banner_w, banner_h, banner_opacity,
-                smart_selection, distribution_mode, accounts or [],
+                smart_selection, scene_start, subtitle_font, distribution_mode, accounts or [],
                 enable_scheduled, schedule_start_date, schedule_start_time, schedule_interval
             ))
         finally:

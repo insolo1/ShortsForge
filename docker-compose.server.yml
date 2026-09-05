@@ -1,45 +1,6 @@
+version: "3.8"
+
 services:
-  web:
-    build: .
-    container_name: web-app
-    entrypoint: ["wait-for-it.sh", "db", "5432", "python", "manage.py"]
-    ports:
-      - "5000:5000"
-    volumes:
-      - .:/app
-    env_file:
-      - .env
-    environment:
-      - FLASK_APP=manage.py
-      - FLASK_ENV=development
-      - FLASK_DEBUG=1
-    restart: always
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - app_network
-
-  worker:
-    build: .
-    container_name: worker-app
-    restart: always
-    entrypoint: ["wait-for-it.sh", "db", "5432", "python", "-u", "oblig_worker/main.py"]
-    ports:
-      - "5001:5001"
-    volumes:
-      - .:/app
-    env_file:
-      - .env
-    environment:
-      - PYTHONPATH=/app
-      - TZ=Asia/Yekaterinburg
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - app_network
-
   db:
     image: postgres:13
     container_name: db-app
@@ -73,6 +34,28 @@ services:
     networks:
       - app_network
 
+  anamnesis:
+    build:
+      context: ./anamnesis
+      dockerfile: Dockerfile.anamnesis
+    container_name: anamnesis
+    restart: unless-stopped
+    ports:
+      - "8300:8000"
+    volumes:
+      - anamnesis_data:/app/data
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Yekaterinburg
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - app_network
+
   videobot:
     build:
       context: ./videobot
@@ -84,31 +67,41 @@ services:
     volumes:
       - ./videobot/app:/app/app
       - ./videobot/static:/app/static
-      - ./videobot/.env:/app/.env:ro
+      - ./videobot/fonts:/app/fonts
+      - ./videobot/.env:/app/.env
       - ./videobot/client_secret.json:/app/client_secret.json:ro
-      - ./videobot/users.json:/app/users.json:ro
+      - ./videobot/users.json:/app/users.json
       - ./videobot/sessions.json:/app/sessions.json
       - ./videobot/presets.json:/app/presets.json
       - ./videobot/uploads:/app/uploads
       - ./videobot/output:/app/output
       - ./videobot/tokens:/app/tokens
       - ./videobot/google_credentials:/app/google_credentials
-      - ./videobot/saved:/app/saved
-      - whisper_cache:/app/.cache/whisper
     environment:
       - FFMPEG_PATH=/usr/bin/ffmpeg
       - PYTHONPATH=/app
-      - WHISPER_CACHE_DIR=/app/.cache/whisper
-      - OMP_NUM_THREADS=2
-      - MKL_NUM_THREADS=2
-      - OPENBLAS_NUM_THREADS=2
+      - TZ=Asia/Yekaterinburg
+    networks:
+      - app_network
+
+  tiktokbot:
+    build:
+      context: ./tiktokbot
+      dockerfile: Dockerfile
+    container_name: tiktokbot
+    restart: unless-stopped
+    volumes:
+      - ./tiktokbot/cookies:/app/cookies
+      - ./tiktokbot/streak_bot.db:/app/streak_bot.db
+      - ./tiktokbot/.env:/app/.env:ro
+    environment:
       - TZ=Asia/Yekaterinburg
     networks:
       - app_network
 
 volumes:
   postgres_data:
-  whisper_cache:
+  anamnesis_data:
 
 networks:
   app_network:
