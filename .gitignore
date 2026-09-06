@@ -11,6 +11,11 @@ __pycache__/
 venv/
 api_keys.json
 tokens/
+google_credentials/
+client_secret.json
+saved/
+cache/
+.cache/
 job_logs.json
 jobs.json
 sessions.json

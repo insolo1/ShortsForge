@@ -31,10 +31,12 @@
 
 ## 🚀 Быстрый старт
 
-### Вариант 1 — Windows (локально)
+Самый простой и воспроизводимый вариант — Docker. Для локальной разработки без Docker понадобится Python 3.11 и установленный FFmpeg.
+
+### Вариант 1 — Windows (локально, без Docker)
 
 ```powershell
-# 1. Установи FFmpeg и добавь его в PATH:
+# 1. Установи Python 3.11, Git и FFmpeg. Добавь FFmpeg в PATH:
 #    https://ffmpeg.org/download.html
 
 # 2. Клонируй и настрой
@@ -55,45 +57,70 @@ python run.py
 # Открой http://127.0.0.1:8000
 ```
 
-### Вариант 2 — Linux / сервер (Docker)
+Если PowerShell запрещает активацию окружения, выполни один раз от своего пользователя:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+### Вариант 2 — Linux / сервер (Docker, рекомендуется)
+
+Нужны Git, Docker Engine и плагин Docker Compose. Проверка:
+
+```bash
+git --version
+docker --version
+docker compose version
+```
 
 ```bash
 git clone https://github.com/insolo1/ShortsForge.git
 cd ShortsForge
 
-# 1. Папки для Docker (контейнер работает от UID 1000)
-mkdir -p uploads output tokens google_credentials
-sudo chown -R 1000:1000 uploads output tokens google_credentials
+# 1. Конфигурация. Не добавляй созданный .env в Git.
+cp .env.example .env
+nano .env
 
-# 2. Конфигурация
-cp .env.example .env      # добавь API-ключи, FFMPEG_PATH=/usr/bin/ffmpeg
-python3 create_user.py    # создай аккаунт админа
+# 2. Постоянные каталоги и JSON-файлы для bind mounts
+mkdir -p uploads output saved tokens google_credentials cache/whisper
+for file in users.json sessions.json presets.json jobs.json job_logs.json settings.json api_keys.json; do
+  [ -f "$file" ] || printf '{}\n' > "$file"
+done
 
-# 3. Запуск
+# 3. Создай пользователя для входа
+python3 create_user.py
+
+# Контейнер работает от UID 1000
+sudo chown -R 1000:1000 uploads output saved tokens google_credentials cache \
+  users.json sessions.json presets.json jobs.json job_logs.json settings.json api_keys.json
+
+# 4. Проверка конфигурации и запуск
+docker compose config
 docker compose up -d --build videobot
-# Сайт: http://YOUR_SERVER_IP:8200
+docker compose logs -f videobot
+```
 
-# Обновление после изменений в коде:
+Открой `http://IP_СЕРВЕРА:8200`. Если включён UFW:
+
+```bash
+sudo ufw allow 8200/tcp
+```
+
+Обновление установленного приложения:
+
+```bash
 git pull
 docker compose up -d --build videobot
+docker image prune -f
 ```
 
-### Вариант 3 — Termux (Android)
-
-```bash
-pkg update && pkg install -y git ffmpeg python3 docker
-git clone https://github.com/insolo1/ShortsForge.git
-cd ShortsForge
-cp .env.example .env
-python3 create_user.py
-docker compose up -d --build videobot
-```
-
-> 💡 Активная ветка по умолчанию — `develop`. Когда нужен стабильный релиз — смёрджи её в `main`.
+> Активная ветка разработки — `develop`. Для стабильной установки можно заменить команду клонирования на `git clone --branch main https://github.com/insolo1/ShortsForge.git`.
 
 ---
 
 ## ⚙️ Конфигурация (.env)
+
+Для запуска без AI-метаданных достаточно скопировать `.env.example`. API-ключи Groq/OpenAI необязательны. Никогда не публикуй `.env`, `client_secret.json`, содержимое `tokens/` и рабочие JSON-файлы.
 
 | Переменная | Обязательно | Описание |
 |---|---|---|
@@ -104,8 +131,12 @@ docker compose up -d --build videobot
 | `OPENAI_CHAT_MODEL` | Нет | По умолчанию `gpt-4o-mini` |
 | `WHISPER_MODEL` | Нет | `base` / `small` / `medium` / `large-v3` / `large-v3-turbo` |
 | `WHISPER_DEVICE` | Нет | `auto` / `cpu` / `cuda` |
+| `WHISPER_CPU_THREADS` | Нет | Потоков CPU для Whisper (по умолчанию до `4`) |
+| `WHISPER_BEAM_SIZE` | Нет | `1` — быстро, `5` — точнее, но медленнее |
 | `SEGMENT_WORKERS` | Нет | Параллельных задач сегментов (по умолчанию `2`) |
 | `VIDEO_PRESET` | Нет | `low` / `medium` / `high` (NVENC) или CPU-пресет |
+| `VIDEO_CPU_PRESET` | Нет | CPU-кодирование: по умолчанию `veryfast`; `medium` медленнее |
+| `VIDEO_CPU_CRF` | Нет | Качество CPU-кодирования: по умолчанию `20`; меньше — качественнее и медленнее |
 | `YOUTUBE_API_KEY` | Нет | YouTube Data API v3 ключ |
 | `DATABASE_URL` | Нет | Postgres (продакшен), иначе без БД |
 | `REDIS_URL` | Нет | Redis (брокер Celery для продакшена) |
@@ -125,6 +156,20 @@ docker compose up -d --build videobot
 5. **Генерируй** — следи за прогрессом в реальном времени
 6. **Скачивай** — отдельные MP4 или ZIP (авто-разбивка, максимум 1.5 ГБ на архив)
 7. **Публикуй на YouTube** — подключи OAuth, выбери аккаунт, выложи
+
+### Быстрые настройки для CPU-сервера
+
+```env
+WHISPER_MODEL=base
+WHISPER_CPU_THREADS=4
+WHISPER_BEAM_SIZE=1
+WHISPER_VAD_FILTER=1
+SEGMENT_WORKERS=2
+VIDEO_CPU_PRESET=veryfast
+VIDEO_CPU_CRF=20
+```
+
+`large-v3-turbo` и `large-v3` на сервере без CUDA могут обрабатываться во много раз дольше. Начни с `base`, проверь результат и только затем повышай модель.
 
 ---
 
@@ -163,17 +208,19 @@ docker compose up -d --build videobot
 
 ## 🏭 Продакшен-стек
 
-Для полного продакшена (Postgres + сопутствующие боты) используй `docker-compose.server.yml`:
+Для самостоятельного запуска используй только `docker-compose.yml`. Файл `docker-compose.server.yml` относится к авторскому монорепозиторию с дополнительными проектами и из одного этого репозитория не запускается.
+
+Для публикации в интернет рекомендуется поставить перед приложением Nginx или Caddy, включить HTTPS и не открывать порт 8200 напрямую наружу.
+
+### Полезные команды Docker
 
 ```bash
-cp .env.example .env   # задай POSTGRES_USER / PASSWORD / DB
-docker compose -f docker-compose.server.yml up -d --build
+docker compose ps                     # состояние
+docker compose logs -f videobot       # логи
+docker compose restart videobot       # перезапуск
+docker compose down                   # остановка без удаления bind-данных
+docker compose up -d --build videobot # пересборка после обновления
 ```
-
-Стек поднимает:
-- `db` — PostgreSQL 13
-- `videobot` — это приложение (порт 8200)
-- `mitsubishi-docs`, `anamnesis`, `tiktokbot` — сопутствующие сервисы (отдельные репозитории)
 
 ---
 
@@ -227,6 +274,42 @@ videobot/
 | `AI metadata failed` | Проверь API-ключи в .env и квоты (Groq → fallback на OpenAI) |
 | `YouTube upload 403` | Пере-авторизуй аккаунт, проверь scopes OAuth |
 | `ZIP download fails` | Архивы >1.5 ГБ режутся; качай части отдельно |
+| `Permission denied: /app/uploads/banners` | Выполни `sudo chown -R 1000:1000 uploads output saved`; в новой версии также есть автоматический fallback |
+| Первый запуск Docker создал папку вместо JSON-файла | Останови Compose, удали именно ошибочно созданную папку и повтори шаг инициализации JSON из инструкции |
+| Видео создаётся очень долго | Выбери Whisper `base`, `VIDEO_CPU_PRESET=veryfast`; для `large-v3*` используй CUDA |
+| `invalid_grant` от YouTube | Удали просроченный аккаунт/токен в интерфейсе и авторизуй заново |
+
+---
+
+## 📤 Как опубликовать изменения в GitHub
+
+Репозиторий использует `develop` для разработки. Перед коммитом проверь, что секреты и видео не попали в индекс:
+
+```bash
+git status --short
+git diff --check
+git diff
+```
+
+Добавь только исходники и публичную документацию:
+
+```bash
+git add app/main.py app/processor.py app/integrations/whisper.py \
+  .env.example .gitignore README.md Dockerfile docker-compose.yml run.py
+git diff --cached
+git commit -m "Fix uploads and speed up video processing"
+git push origin develop
+```
+
+Не используй `git add .`, пока не убедишься, что `.env`, OAuth-токены, API-ключи и видео игнорируются. Для стабильного релиза создай Pull Request из `develop` в `main` на GitHub. Если работаешь один и хочешь выполнить слияние локально:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git merge --no-ff develop
+git push origin main
+git switch develop
+```
 
 ---
 

@@ -19,9 +19,10 @@ sys.stderr.reconfigure(line_buffering=True)
 # Suppress uvicorn access log spam
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
-os.environ["OMP_NUM_THREADS"] = "2"
-os.environ["MKL_NUM_THREADS"] = "2"
-os.environ["OPENBLAS_NUM_THREADS"] = "2"
+_default_cpu_threads = str(max(1, min(4, os.cpu_count() or 1)))
+os.environ.setdefault("OMP_NUM_THREADS", _default_cpu_threads)
+os.environ.setdefault("MKL_NUM_THREADS", _default_cpu_threads)
+os.environ.setdefault("OPENBLAS_NUM_THREADS", _default_cpu_threads)
 
 # FFmpeg path from env (default: ffmpeg in PATH)
 # On Windows, set FFMPEG_PATH in .env if not in system PATH
@@ -1110,10 +1111,19 @@ async def _save_banner_upload(banner_file, job_id: str) -> str:
     """РЎРѕС…СЂР°РЅСЏРµС‚ Р·Р°РіСЂСѓР¶РµРЅРЅС‹Р№ Р±Р°РЅРЅРµСЂ (РёР·РѕР±СЂР°Р¶РµРЅРёРµ РёР»Рё РІРёРґРµРѕ) РІ BANNER_DIR."""
     if not banner_file or not banner_file.filename:
         return None
-    BANNER_DIR.mkdir(parents=True, exist_ok=True)
     ext = Path(banner_file.filename).suffix or ".png"
-    path = BANNER_DIR / f"banner_{job_id}{ext}"
-    with open(path, "wb") as f:
+    filename = f"banner_{job_id}{ext}"
+    try:
+        BANNER_DIR.mkdir(parents=True, exist_ok=True)
+        path = BANNER_DIR / filename
+        # Opening also verifies permissions on an existing bind-mounted folder.
+        file_obj = open(path, "wb")
+    except PermissionError:
+        # uploads/banners can retain root ownership while /app/uploads is writable.
+        path = UPLOAD_DIR / filename
+        print(f"[UPLOAD] Banner directory is not writable; using {path}")
+        file_obj = open(path, "wb")
+    with file_obj as f:
         while True:
             chunk = await banner_file.read(1024 * 1024)
             if not chunk:

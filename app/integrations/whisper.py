@@ -43,7 +43,13 @@ def _get_model(model_size: str = None):
         from faster_whisper import WhisperModel
         device, compute_type = _detect_whisper_device()
         print(f"[WHISPER] Loading '{size}' ({device}, {compute_type})...")
-        _whisper_model = WhisperModel(size, device=device, compute_type=compute_type)
+        cpu_threads = max(1, int(os.getenv("WHISPER_CPU_THREADS", str(min(4, os.cpu_count() or 1)))))
+        _whisper_model = WhisperModel(
+            size,
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=cpu_threads if device == "cpu" else 0,
+        )
         _whisper_model_size = size
     return _whisper_model
 
@@ -96,7 +102,13 @@ async def transcribe(video_path: str, start: float, end: float, word_timestamps:
 
         print(f"[WHISPER] Transcribing {start}s-{end}s...")
         segments_gen, info = await loop.run_in_executor(
-            None, lambda: model.transcribe(temp_audio.name, language="ru", word_timestamps=word_timestamps)
+            None, lambda: model.transcribe(
+                temp_audio.name,
+                language="ru",
+                word_timestamps=word_timestamps,
+                beam_size=max(1, int(os.getenv("WHISPER_BEAM_SIZE", "1"))),
+                vad_filter=os.getenv("WHISPER_VAD_FILTER", "1") == "1",
+            )
         )
 
         segments_list = []

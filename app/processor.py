@@ -127,7 +127,13 @@ class VideoProcessor:
                     pass
                 print(f"[WHISPER] Loading model '{model_size}' ({device}, {compute_type})...")
                 from faster_whisper import WhisperModel
-                cls._whisper_model = WhisperModel(model_size, device=device, compute_type=compute_type)
+                cpu_threads = max(1, int(_read_env("WHISPER_CPU_THREADS", str(min(4, os.cpu_count() or 1)))))
+                cls._whisper_model = WhisperModel(
+                    model_size,
+                    device=device,
+                    compute_type=compute_type,
+                    cpu_threads=cpu_threads if device == "cpu" else 0,
+                )
                 cls._whisper_model_size = model_size
             return cls._whisper_model
     
@@ -1182,9 +1188,17 @@ class VideoProcessor:
             video_preset = "fast"
             video_quality = ["-cq", "18"]
         else:
+            allowed_cpu_presets = {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium"}
+            cpu_preset = _read_env("VIDEO_CPU_PRESET", "veryfast").lower()
+            if cpu_preset not in allowed_cpu_presets:
+                cpu_preset = "veryfast"
+            try:
+                cpu_crf = min(28, max(16, int(_read_env("VIDEO_CPU_CRF", "20"))))
+            except ValueError:
+                cpu_crf = 20
             video_codec = "libx264"
-            video_preset = "medium"
-            video_quality = ["-crf", "16", "-threads", "0"]
+            video_preset = cpu_preset
+            video_quality = ["-crf", str(cpu_crf), "-threads", "0"]
         
         # ASS субтитры — один subtitles фильтр вместо цепочки drawtext
         if ass_path and ass_path.exists():
@@ -1229,10 +1243,17 @@ class VideoProcessor:
                 ]
                 if map_audio:
                     cmd += ["-map", map_audio]
+                cpu_preset = _read_env("VIDEO_CPU_PRESET", "veryfast").lower()
+                if cpu_preset not in {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium"}:
+                    cpu_preset = "veryfast"
+                try:
+                    cpu_crf = min(28, max(16, int(_read_env("VIDEO_CPU_CRF", "20"))))
+                except ValueError:
+                    cpu_crf = 20
                 cmd += [
                     "-c:v", "libx264",
-                    "-preset", "medium",
-                    "-crf", "16",
+                    "-preset", cpu_preset,
+                    "-crf", str(cpu_crf),
                     "-threads", "0",
                     "-c:a", "aac",
                     "-b:a", "192k",
@@ -1241,8 +1262,8 @@ class VideoProcessor:
                 result = await loop.run_in_executor(None, lambda: subprocess.run(cmd, capture_output=True, timeout=600, cwd=str(BASE_DIR)))
                 if result.returncode == 0:
                     video_codec = "libx264"
-                    video_preset = "medium"
-                    video_quality = ["-crf", "16"]
+                    video_preset = cpu_preset
+                    video_quality = ["-crf", str(cpu_crf)]
             if result.returncode != 0:
                 if ass_path and ass_path.exists():
                     ass_path.unlink(missing_ok=True)
@@ -1480,7 +1501,15 @@ class VideoProcessor:
             start_transcribe = time.time()
             print(f"[WHISPER] Starting model.transcribe()...")
             try:
-                result = model.transcribe(temp_audio.name, language="ru", word_timestamps=word_timestamps)
+                beam_size = max(1, int(_read_env("WHISPER_BEAM_SIZE", "1")))
+                vad_filter = _read_env("WHISPER_VAD_FILTER", "1") == "1"
+                result = model.transcribe(
+                    temp_audio.name,
+                    language="ru",
+                    word_timestamps=word_timestamps,
+                    beam_size=beam_size,
+                    vad_filter=vad_filter,
+                )
                 print(f"[WHISPER] model.transcribe() returned, type: {type(result)}")
                 
                 segments_list = []
