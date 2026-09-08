@@ -25,7 +25,17 @@
 | ✍️ **Анимированные субтитры** | Настраиваемые шрифты, стили, границы |
 | 🧩 **Тактики монтажа** | `off` / `global` / `parts` / `hybrid` |
 | 📺 **Загрузка на YouTube** | OAuth + прямой аплоад в один клик |
-| 🐳 **Docker** | Работает на серверах и даже в Termux (Android) |
+| 🐳 **Docker** | Воспроизводимый запуск на Windows и Linux-серверах |
+
+## 🆕 Последние изменения
+
+- Большие результаты автоматически делятся на отдельные ZIP-части размером до 1,5 ГБ.
+- При загрузке папки нарезки сохраняют группировку по исходным видео.
+- Если нарезки одного видео превышают 1,5 ГБ, внутри архивов создаются папки `Название видео 1`, `Название видео 2` и далее.
+- ZIP скачивается напрямую, без загрузки всего архива в память страницы, что устраняет частую ошибку `Failed to fetch`.
+- Ускорена CPU-обработка: Whisper использует быстрый поиск, VAD и настраиваемое число потоков; FFmpeg использует профиль `veryfast`.
+- Если Docker не может записать файл в `uploads/banners`, баннер автоматически сохраняется в доступную папку `uploads`.
+- Docker сохраняет между пересборками настройки, историю заданий, результаты и кэш модели Whisper.
 
 ---
 
@@ -35,32 +45,139 @@
 
 ### Вариант 1 — Windows (локально, без Docker)
 
+Установи:
+
+- [Visual Studio Code](https://code.visualstudio.com/)
+- [Git for Windows x64](https://git-scm.com/download/win) для обычных процессоров Intel/AMD
+- [Python 3.11](https://www.python.org/downloads/release/python-3119/)
+- [полную сборку FFmpeg 5.1 или новее](https://ffmpeg.org/download.html)
+
+При установке Python обязательно отметь `Add Python to PATH`. После установки открой VS Code → **Terminal → New Terminal** и проверь программы:
+
 ```powershell
-# 1. Установи Python 3.11, Git и FFmpeg. Добавь FFmpeg в PATH:
-#    https://ffmpeg.org/download.html
-
-# 2. Клонируй и настрой
-git clone https://github.com/insolo1/ShortsForge.git
-cd ShortsForge
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-
-# 3. Конфигурация
-copy .env.example .env    # впиши свои API-ключи
-
-# 4. Создай админа для входа
-python create_user.py
-
-# 5. Запуск
-python run.py
-# Открой http://127.0.0.1:8000
+git --version
+python --version
+ffmpeg -version
 ```
 
-Если PowerShell запрещает активацию окружения, выполни один раз от своего пользователя:
+Клонируй актуальную ветку проекта:
+
+```powershell
+git clone --branch develop https://github.com/insolo1/ShortsForge.git
+cd ShortsForge
+code .
+```
+
+Если `code .` не работает, выбери в VS Code **File → Open Folder → ShortsForge**. Проверить текущую папку можно командой `Get-Location`.
+
+Создай конфигурацию:
+
+```powershell
+Copy-Item .env.example .env
+code .env
+```
+
+Сначала проверь FFmpeg:
+
+```powershell
+ffmpeg -version
+```
+
+Если команда работает, оставь в `.env`:
+
+```env
+FFMPEG_PATH=ffmpeg
+```
+
+Если команда не работает, найди `ffmpeg.exe` и укажи его реальный полный путь, например:
+
+```env
+FFMPEG_PATH=C:/ffmpeg/bin/ffmpeg.exe
+```
+
+Проверить произвольный путь можно так:
+
+```powershell
+& "C:\ffmpeg\bin\ffmpeg.exe" -version
+```
+
+После настройки FFmpeg продолжи в терминале VS Code:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r requirements.txt
+```
+
+В начале строки терминала должно появиться `(.venv)`. Если PowerShell запрещает активацию:
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Закрой терминал, открой новый и снова активируй окружение:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+API-ключ для создания названий и описаний необязателен. При необходимости добавь в `.env` ключ Groq:
+
+```env
+GROQ_API_KEY=сюда_ключ
+```
+
+Или OpenAI:
+
+```env
+OPENAI_API_KEY=сюда_ключ
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_CHAT_MODEL=gpt-4o-mini
+```
+
+Создай администратора и запусти сайт:
+
+```powershell
+python create_user.py
+python run.py
+```
+
+Открой `http://127.0.0.1:8000`. Остановка — `Ctrl+C`.
+
+Последующие запуски:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python run.py
+```
+
+Обновление проекта:
+
+```powershell
+git pull origin develop
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python run.py
+```
+
+Для доступа с телефона или другого компьютера в одной сети запусти:
+
+```powershell
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+ipconfig
+```
+
+На другом устройстве открой `http://IP_КОМПЬЮТЕРА:8000`. Если Windows блокирует подключение, выполни PowerShell от администратора:
+
+```powershell
+New-NetFirewallRule `
+  -DisplayName "VideoBot 8000" `
+  -Direction Inbound `
+  -Protocol TCP `
+  -LocalPort 8000 `
+  -Action Allow
 ```
 
 ### Вариант 2 — Linux / сервер (Docker, рекомендуется)
@@ -283,27 +400,52 @@ videobot/
 
 ## 📤 Как опубликовать изменения в GitHub
 
-Репозиторий использует `develop` для разработки. Перед коммитом проверь, что секреты и видео не попали в индекс:
+Репозиторий использует `develop` для разработки. Все команды выполняются в терминале VS Code из папки `ShortsForge`.
 
-```bash
+Получить проект впервые:
+
+```powershell
+git clone --branch develop https://github.com/insolo1/ShortsForge.git
+cd ShortsForge
+```
+
+Перед коммитом проверь, что секреты и видео не попали в индекс:
+
+```powershell
 git status --short
 git diff --check
 git diff
 ```
 
-Добавь только исходники и публичную документацию:
+Опубликовать только изменения README:
 
-```bash
-git add app/main.py app/processor.py app/integrations/whisper.py \
-  .env.example .gitignore README.md Dockerfile docker-compose.yml run.py
+```powershell
+git add README.md
 git diff --cached
-git commit -m "Fix uploads and speed up video processing"
+git commit -m "Update installation guide and feature documentation"
 git push origin develop
+```
+
+Опубликовать исходники вместе с документацией:
+
+```powershell
+git add app/main.py app/processor.py app/integrations/whisper.py .env.example .gitignore README.md Dockerfile docker-compose.yml run.py
+git diff --cached
+git commit -m "Add split ZIP downloads and optimize video processing"
+git push origin develop
+```
+
+Получить последние обновления на другом компьютере:
+
+```powershell
+git switch develop
+git pull --ff-only origin develop
+python -m pip install -r requirements.txt
 ```
 
 Не используй `git add .`, пока не убедишься, что `.env`, OAuth-токены, API-ключи и видео игнорируются. Для стабильного релиза создай Pull Request из `develop` в `main` на GitHub. Если работаешь один и хочешь выполнить слияние локально:
 
-```bash
+```powershell
 git switch main
 git pull --ff-only origin main
 git merge --no-ff develop
