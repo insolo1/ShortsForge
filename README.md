@@ -50,13 +50,19 @@
 - [Visual Studio Code](https://code.visualstudio.com/)
 - [Git for Windows x64](https://git-scm.com/download/win) для обычных процессоров Intel/AMD
 - [Python 3.11](https://www.python.org/downloads/release/python-3119/)
-- [полную сборку FFmpeg 5.1 или новее](https://ffmpeg.org/download.html)
+- полную сборку FFmpeg 5.1 или новее (инструкция ниже)
 
-При установке Python обязательно отметь `Add Python to PATH`. После установки открой VS Code → **Terminal → New Terminal** и проверь программы:
+При установке Python обязательно отметь `Add Python to PATH`. FFmpeg на Windows проще всего установить через Winget:
+
+```powershell
+winget install --id Gyan.FFmpeg -e
+```
+
+Полностью закрой VS Code и PowerShell после установки, затем открой их заново: уже запущенные процессы не получают обновлённый `PATH`. В новом терминале проверь программы:
 
 ```powershell
 git --version
-python --version
+py -3.11 --version
 ffmpeg -version
 ```
 
@@ -77,51 +83,54 @@ Copy-Item .env.example .env
 code .env
 ```
 
-Сначала проверь FFmpeg:
+### Надёжная настройка FFmpeg на Windows
+
+Сначала узнай путь, который зарегистрировал Winget, и проверь запуск файла напрямую:
 
 ```powershell
-ffmpeg -version
+$ffmpeg = (Get-Command ffmpeg.exe -ErrorAction Stop).Source
+$ffmpeg
+& $ffmpeg -version
 ```
 
-Если команда работает, оставь в `.env`:
+Ожидаемый результат заканчивается строкой `Exiting with exit code 0`. Запиши **полный путь к файлу `ffmpeg.exe`** в `.env` в корне проекта, используя прямые слеши:
 
 ```env
-FFMPEG_PATH=ffmpeg
+FFMPEG_PATH=C:/Users/User/AppData/Local/Microsoft/WinGet/Links/ffmpeg.exe
 ```
 
-Если команда не работает, найди `ffmpeg.exe` и укажи его реальный полный путь, например:
+Не указывай в `FFMPEG_PATH` папку проекта, каталог `bin` без имени файла или путь с повреждённой кириллицей вида `Р±Рё...`. Файл `.env` должен быть сохранён в UTF-8.
 
-```env
-FFMPEG_PATH=C:/ffmpeg/bin/ffmpeg.exe
-```
-
-Проверить произвольный путь можно так:
-
-```powershell
-& "C:\ffmpeg\bin\ffmpeg.exe" -version
-```
 
 После настройки FFmpeg продолжи в терминале VS Code:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -r requirements.txt
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.\.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-В начале строки терминала должно появиться `(.venv)`. Если PowerShell запрещает активацию:
+Проверь, что Uvicorn и FFmpeg доступны именно этому окружению:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn --version
+.\.venv\Scripts\python.exe -c "from dotenv import load_dotenv; load_dotenv(override=True); import os, subprocess; p=os.getenv('FFMPEG_PATH', 'ffmpeg'); print(repr(p)); subprocess.run([p, '-version'], check=True)"
+```
+
+Если обе проверки проходят без `Traceback`, окружение настроено правильно. Активируй его:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+В начале строки терминала должно появиться `(.venv)`. Если PowerShell запрещает активацию, один раз выполни:
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
-Закрой терминал, открой новый и снова активируй окружение:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-```
+Закрой терминал, открой новый и снова выполни `.\.venv\Scripts\Activate.ps1`.
 
 API-ключ для создания названий и описаний необязателен. При необходимости добавь в `.env` ключ Groq:
 
@@ -385,7 +394,10 @@ videobot/
 
 | Проблема | Решение |
 |---|---|
-| `ffmpeg not found` | Установи ffmpeg, добавь в PATH или задай `FFMPEG_PATH` в .env |
+| `ffmpeg not found` или `[WinError 2]` | Выполни `winget install --id Gyan.FFmpeg -e`, перезапусти VS Code и укажи абсолютный путь к `ffmpeg.exe` в `.env` |
+| `[WinError 5] Отказано в доступе` при запуске FFmpeg | `FFMPEG_PATH` часто указывает на папку. Укажи полный путь, заканчивающийся на `ffmpeg.exe`, и проверь его командой `& $env:FFMPEG_PATH -version` |
+| `python-dotenv could not parse statement` | Исправь указанную строку `.env`, сохрани файл в UTF-8; не используй повреждённую кириллицу вида `Р±Рё...` |
+| `No module named uvicorn` или команда `uvicorn` не найдена | Запускай `.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload`; если модуля нет, повтори установку `requirements.txt` этим же Python |
 | `CUDA out of memory` | Меньшая Whisper-модель (`base`), снизь `SEGMENT_WORKERS` |
 | `Неверный логин или пароль` | Запусти `python3 create_user.py` и задай пароль заново |
 | `AI metadata failed` | Проверь API-ключи в .env и квоты (Groq → fallback на OpenAI) |
